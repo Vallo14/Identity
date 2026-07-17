@@ -1,0 +1,1707 @@
+local Players           = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace         = game:GetService("Workspace")
+local UserInputService  = game:GetService("UserInputService")
+local Lighting          = game:GetService("Lighting")
+local RunService        = game:GetService("RunService")
+
+local localPlayer = Players.LocalPlayer
+
+local REFRESH_INTERVAL = 0.5
+
+local function findRemote(...): Instance?
+	local path = { ... }
+	local ok, result = pcall(function()
+		local node: Instance = ReplicatedStorage
+		for _, name in ipairs(path) do
+			node = node:WaitForChild(name, 15)
+		end
+		return node
+	end)
+	if ok then return result end
+	return nil
+end
+
+local Event = findRemote("ServiceNetworks", "effectsService", "playEffect")
+if not Event then
+	warn("[Identity Monitor] Could NOT find effectsService.playEffect")
+	return
+end
+
+-- Music remote — used by the (experimental) discussion filter. Not fatal if missing.
+local musicEvent = findRemote("ServiceNetworks", "audioService", "playMusic")
+if not musicEvent then
+	warn("[Identity Monitor] Could NOT find audioService.playMusic — discussion filter will do nothing")
+end
+
+--==================================================================
+-- Effect parsing
+--==================================================================
+local function collect(value: any, out: { any }, depth: number)
+	if depth > 5 then return end
+	if typeof(value) == "table" then
+		local seen: { [any]: boolean } = {}
+		for i, v in ipairs(value) do
+			seen[i] = true
+			collect(v, out, depth + 1)
+		end
+		for k, v in pairs(value) do
+			if not seen[k] then
+				collect(v, out, depth + 1)
+			end
+		end
+	else
+		table.insert(out, value)
+	end
+end
+
+-- Flatten packed varargs into a single list of scalar values.
+local function flatten(args: { n: number, [number]: any }): { any }
+	local flat: { any } = {}
+	for i = 1, args.n do
+		collect(args[i], flat, 0)
+	end
+	return flat
+end
+
+-- Pull killType / killer / victim out of an already-flattened list.
+local function parseFlat(flat: { any })
+	local killType, killer, victim = nil, nil, nil
+	local instCount = 0
+	for _, v in ipairs(flat) do
+		local ty = typeof(v)
+		if ty == "string" and killType == nil then
+			killType = v
+		elseif ty == "Instance" then
+			instCount += 1
+			if instCount == 1 then killer = v
+			elseif instCount == 2 then victim = v end
+		end
+	end
+	return killType, killer, victim
+end
+
+local function nameOf(v: any): string
+	if typeof(v) == "Instance" then
+		return v.Name
+	elseif v == nil then
+		return "?"
+	end
+	return tostring(v)
+end
+
+local function verbFor(dmgType: any): string
+	local t = string.lower(tostring(dmgType))
+	if string.find(t, "gun") or string.find(t, "shot") or string.find(t, "bullet") then
+		return "Shot"
+	elseif string.find(t, "knife") or string.find(t, "stab")
+		or string.find(t, "wound") or string.find(t, "blade") then
+		return "Stabbed"
+	end
+	return "Hit"
+end
+
+local function colorFor(dmgType: any): Color3
+	local verb = verbFor(dmgType)
+	if verb == "Shot" then return Color3.fromRGB(255, 170, 60) end
+	if verb == "Stabbed" then return Color3.fromRGB(255, 90, 100) end
+	return Color3.fromRGB(120, 170, 255)
+end
+
+-- True if the effect carries "???" (unknown) info in any string arg.
+local function hasUnknownInfo(flat: { any }): boolean
+	for _, v in ipairs(flat) do
+		if typeof(v) == "string" and string.find(v, "???", 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+--==================================================================
+-- Monitor filters (all toggleable)
+--==================================================================
+-- Shots & Stabs Only: when ON, only gunshots and knife stabs reach the monitor
+-- (orbital / closet / hits / unknown "???" shots are simply not shown).
+local killsOnlyEnabled = true
+-- Discussion filter (experimental): kills during discussionMusic are vigilante.
+local discussionFilterEnabled = true
+local DISCUSSION_MUSIC_NAME = "discussionMusic"
+local currentMusic: string? = nil
+
+-- Fullbright: flatten all lighting so there's no darkness (Effects toggle).
+local fullbrightEnabled = false
+local fbSaved: { [string]: any }? = nil
+
+local fbApplying = false  -- guards against reacting to our own Lighting writes
+
+local function applyFullbrightValues()
+	fbApplying = true
+	Lighting.Brightness           = 2
+	Lighting.ClockTime            = 12
+	Lighting.FogEnd               = 1e9
+	Lighting.FogStart             = 0
+	Lighting.GlobalShadows        = false
+	Lighting.Ambient              = Color3.fromRGB(200, 200, 200)
+	Lighting.OutdoorAmbient       = Color3.fromRGB(200, 200, 200)
+	Lighting.ExposureCompensation = 0
+	fbApplying = false
+end
+
+local function setFullbright(on: boolean)
+	if on then
+		if not fbSaved then
+			fbSaved = {
+				Brightness           = Lighting.Brightness,
+				ClockTime            = Lighting.ClockTime,
+				FogEnd               = Lighting.FogEnd,
+				FogStart             = Lighting.FogStart,
+				GlobalShadows        = Lighting.GlobalShadows,
+				Ambient              = Lighting.Ambient,
+				OutdoorAmbient       = Lighting.OutdoorAmbient,
+				ExposureCompensation = Lighting.ExposureCompensation,
+			}
+		end
+		applyFullbrightValues()
+	elseif fbSaved then
+		fbApplying = true
+		Lighting.Brightness           = fbSaved.Brightness
+		Lighting.ClockTime            = fbSaved.ClockTime
+		Lighting.FogEnd               = fbSaved.FogEnd
+		Lighting.FogStart             = fbSaved.FogStart
+		Lighting.GlobalShadows        = fbSaved.GlobalShadows
+		Lighting.Ambient              = fbSaved.Ambient
+		Lighting.OutdoorAmbient       = fbSaved.OutdoorAmbient
+		Lighting.ExposureCompensation = fbSaved.ExposureCompensation
+		fbApplying = false
+	end
+end
+
+-- Re-assert fullbright the moment the game changes any lighting (e.g. lights
+-- off) so it can't be turned back off underneath us.
+local fbChangedConn: RBXScriptConnection = Lighting.Changed:Connect(function()
+	if fullbrightEnabled and not fbApplying then
+		applyFullbrightValues()
+	end
+end)
+
+-- No-clip (Misc toggle): force the local character's parts non-collidable each
+-- frame while on, remembering each part's original CanCollide to restore later.
+local noclipEnabled = false
+local noclipConn: RBXScriptConnection? = nil
+local noclipOriginals: { [BasePart]: boolean } = {}
+
+local function stopNoclip()
+	if noclipConn then
+		noclipConn:Disconnect()
+		noclipConn = nil
+	end
+	for part, orig in pairs(noclipOriginals) do
+		if part and part.Parent then
+			part.CanCollide = orig
+		end
+	end
+	table.clear(noclipOriginals)
+end
+
+local function startNoclip()
+	if noclipConn then return end
+	noclipConn = RunService.Stepped:Connect(function()
+		local char = localPlayer.Character
+		if not char then return end
+		for _, part in ipairs(char:GetDescendants()) do
+			if part:IsA("BasePart") and part.CanCollide then
+				if noclipOriginals[part] == nil then
+					noclipOriginals[part] = part.CanCollide
+				end
+				part.CanCollide = false
+			end
+		end
+	end)
+end
+
+local function setNoclip(on: boolean)
+	noclipEnabled = on
+	if on then startNoclip() else stopNoclip() end
+end
+
+-- Teleport-stab timing: frames to wait after arriving before the stab fires
+-- (0 = same frame / instant, higher = more reliable that the hit registers).
+local MAX_TP_FRAMES = 6
+local tpStabFrames  = 1
+
+--==================================================================
+-- Mafia: disguise -> true-username map + action stubs
+--==================================================================
+-- Live disguise -> true-username map, auto-built from the Disguises tab data.
+-- Nothing to fill in by hand; rebuilt every refresh by rebuildDisguiseLookup().
+local disguiseLookup: { [string]: string } = {}
+
+local function resolveTarget(text: string?): string?
+	if not text then return nil end
+	text = (text:gsub("^%s+", ""):gsub("%s+$", ""))
+	if text == "" then return nil end
+	local mapped = disguiseLookup[string.lower(text)]
+	if mapped and mapped ~= "" then
+		return mapped        -- known disguise/alias -> real username
+	end
+	return text              -- treat as a raw username
+end
+
+-- >>> FILL IN YOUR OWN REMOTE LOGIC <<<
+-- Each receives the resolved TRUE username string as `targetUsername`.
+local function remoteStab(targetUsername: string)
+	local Event = game:GetService("ReplicatedStorage").RoleNetworks.mafia.onStab
+	Event:InvokeServer(
+		{
+			game:GetService("Players")[targetUsername]
+		}
+	)
+end
+
+local function remoteShoot(targetUsername: string)
+	local Event = game:GetService("ReplicatedStorage").RoleNetworks.mafia.onShoot
+	Event:InvokeServer(
+		{
+			game:GetService("Players")[targetUsername]
+		}
+	)
+end
+
+local function remoteWitch(targetUsername: string)
+	local Event = game:GetService("ReplicatedStorage").RoleNetworks.witch.onSilence
+	Event:InvokeServer(
+		{
+			game:GetService("Players")[targetUsername]
+		}
+	)
+end
+
+--==================================================================
+-- Highlights (one Highlight per character; killer red always wins)
+--==================================================================
+local HL_NAME  = "IdentityHighlight"       -- single highlight per character
+local TAG_NAME = "IdentityDisguiseTag"     -- floating disguise-name label
+
+local highlightEnabled  = false            -- "Highlight Killer" toggle
+local disguiseHlEnabled = false            -- "Highlight Disguises" toggle
+-- Name -> how many recorded (non-ignored) effects credit that killer. A name is
+-- "a killer" while its count > 0; removing its last effect card drops it.
+local killersSeen: { [string]: number } = {}
+
+-- Forward declaration; assigned once isKnownKiller/getDisguiseName exist.
+local updateHighlights: (() -> ())? = nil
+
+-- Disguised = has a character whose name differs from the username.
+local function isDisguised(plr: Player): (boolean, Instance?, string?)
+	local char = plr.Character
+	if not char then return false, nil, nil end
+	if char.Name == plr.Name then return false, char, nil end
+	return true, char, char.Name
+end
+
+-- kind: "killer" (red) | "disguise" (white) | nil (remove)
+local function setCharHighlight(char: Instance, kind: string?)
+	local hl = char:FindFirstChild(HL_NAME)
+	if kind == nil then
+		if hl then hl:Destroy() end
+		return
+	end
+	if not (hl and hl:IsA("Highlight")) then
+		hl = Instance.new("Highlight")
+		hl.Name      = HL_NAME
+		hl.Adornee   = char
+		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		hl.Parent    = char
+	end
+	if kind == "killer" then
+		hl.FillColor           = Color3.fromRGB(255, 40, 45)
+		hl.FillTransparency    = 0.75
+		hl.OutlineColor        = Color3.fromRGB(255, 70, 70)
+		hl.OutlineTransparency = 0.05
+	else
+		hl.FillColor           = Color3.fromRGB(255, 255, 255)
+		hl.FillTransparency    = 0.7
+		hl.OutlineColor        = Color3.fromRGB(255, 255, 255)
+		hl.OutlineTransparency = 0
+	end
+end
+
+-- disguiseName nil -> remove the floating tag.
+local function setCharTag(char: Instance, disguiseName: string?)
+	local head = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+	if disguiseName == nil then
+		if head then
+			local t = head:FindFirstChild(TAG_NAME)
+			if t then t:Destroy() end
+		end
+		return
+	end
+	if not head then return end
+	local tag = head:FindFirstChild(TAG_NAME)
+	if not (tag and tag:IsA("BillboardGui")) then
+		tag = Instance.new("BillboardGui")
+		tag.Name           = TAG_NAME
+		tag.Adornee        = head
+		tag.Size           = UDim2.fromOffset(210, 24)
+		tag.StudsOffset    = Vector3.new(0, 2.8, 0)
+		tag.AlwaysOnTop    = true
+		tag.LightInfluence = 0
+		tag.Parent         = head
+
+		local lbl = Instance.new("TextLabel")
+		lbl.Name                   = "Label"
+		lbl.BackgroundTransparency = 1
+		lbl.Size                   = UDim2.fromScale(1, 1)
+		lbl.Font                   = Enum.Font.GothamBold
+		lbl.Text                   = disguiseName
+		lbl.TextSize               = 14
+		lbl.TextColor3             = Color3.fromRGB(255, 255, 255)
+		lbl.TextStrokeColor3       = Color3.fromRGB(0, 0, 0)
+		lbl.TextStrokeTransparency = 0.35
+		lbl.Parent                 = tag
+	else
+		local lbl = tag:FindFirstChild("Label")
+		if lbl and lbl:IsA("TextLabel") then
+			lbl.Text = disguiseName
+		end
+	end
+end
+
+local function clearAllHighlights()
+	for _, d in ipairs(Workspace:GetDescendants()) do
+		if (d:IsA("Highlight") and d.Name == HL_NAME)
+			or (d:IsA("BillboardGui") and d.Name == TAG_NAME) then
+			d:Destroy()
+		end
+	end
+end
+
+--==================================================================
+-- Theme
+--==================================================================
+local C_BG        = Color3.fromRGB(18, 18, 24)    -- window background (unchanged)
+local C_PANEL     = Color3.fromRGB(23, 24, 33)    -- toolbars / inputs / panels
+local C_CARD      = Color3.fromRGB(25, 26, 36)    -- cards / rows
+local C_BTN       = Color3.fromRGB(29, 32, 46)    -- muted button fill
+local C_TAB_ON    = Color3.fromRGB(30, 40, 64)    -- active tab / ON state (blue)
+local C_TAB_OFF   = Color3.fromRGB(21, 22, 30)
+local C_TEXT      = Color3.fromRGB(235, 238, 248)
+local C_DIM       = Color3.fromRGB(140, 148, 168)
+local C_DISGUISE  = Color3.fromRGB(120, 200, 255)
+local C_KILLER    = Color3.fromRGB(255, 90, 100)
+local C_NEUTRAL   = Color3.fromRGB(66, 74, 98)
+local C_VIGIL     = Color3.fromRGB(120, 195, 150)
+
+-- Borders — thin dark blue everywhere; brighter blue for active / ON states.
+local C_BORDER    = Color3.fromRGB(38, 62, 116)
+local C_BORDER_HL = Color3.fromRGB(72, 122, 205)
+
+-- Muted per-action accents (thin left stripes on Mafia buttons).
+local C_STAB  = Color3.fromRGB(208, 84, 92)
+local C_SHOOT = Color3.fromRGB(214, 142, 64)
+local C_WITCH = Color3.fromRGB(160, 108, 208)
+
+local C_ON_REDX = Color3.fromRGB(66, 34, 40)      -- exit button
+
+local function uiCorner(radius: number, parent: Instance)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, radius)
+	c.Parent = parent
+	return c
+end
+
+-- Thin outline helper — the single source of the border look.
+local function addStroke(parent: Instance, color: Color3?, thickness: number?): UIStroke
+	local s = Instance.new("UIStroke")
+	s.Color           = color or C_BORDER
+	s.Thickness       = thickness or 1
+	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	s.Parent          = parent
+	return s
+end
+
+local function strokeOf(inst: Instance): UIStroke?
+	return inst:FindFirstChildOfClass("UIStroke")
+end
+
+--==================================================================
+-- Window
+--==================================================================
+local refreshDisguises: (() -> ())? = nil
+
+local gui = Instance.new("ScreenGui")
+gui.Name           = "IdentityMonitor"
+gui.ResetOnSpawn   = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder   = 999
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent         = localPlayer:WaitForChild("PlayerGui")
+
+local main = Instance.new("Frame")
+main.Name             = "Window"
+main.Size             = UDim2.fromOffset(384, 470)
+main.Position         = UDim2.new(0, 20, 0.5, -235)
+main.BackgroundColor3 = C_BG
+main.BorderSizePixel  = 0
+main.Active           = true
+main.Parent           = gui
+uiCorner(10, main)
+addStroke(main, C_BORDER, 1)
+
+local bar = Instance.new("Frame")
+bar.Name             = "TitleBar"
+bar.Size             = UDim2.new(1, 0, 0, 40)
+bar.BackgroundColor3 = C_BG
+bar.BorderSizePixel  = 0
+bar.Parent           = main
+uiCorner(10, bar)
+
+local barPatch = Instance.new("Frame")
+barPatch.Size             = UDim2.new(1, 0, 0, 12)
+barPatch.Position         = UDim2.new(0, 0, 1, -12)
+barPatch.BackgroundColor3 = C_BG
+barPatch.BorderSizePixel  = 0
+barPatch.Parent           = bar
+
+local barLine = Instance.new("Frame")
+barLine.Size             = UDim2.new(1, -20, 0, 1)
+barLine.Position         = UDim2.new(0, 10, 1, -1)
+barLine.BackgroundColor3 = C_BORDER
+barLine.BorderSizePixel  = 0
+barLine.Parent           = bar
+
+local title = Instance.new("TextLabel")
+title.BackgroundTransparency = 1
+title.Size           = UDim2.new(1, -80, 1, 0)
+title.Position       = UDim2.new(0, 14, 0, 0)
+title.Font           = Enum.Font.GothamBold
+title.Text           = "Identity Monitor"
+title.TextSize       = 15
+title.TextColor3     = C_TEXT
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent         = bar
+
+local function makeCtrlButton(text: string, xFromRight: number, bg: Color3): TextButton
+	local b = Instance.new("TextButton")
+	b.Size             = UDim2.new(0, 26, 0, 26)
+	b.Position         = UDim2.new(1, xFromRight, 0.5, -13)
+	b.BackgroundColor3 = bg
+	b.BorderSizePixel  = 0
+	b.Font             = Enum.Font.GothamBold
+	b.Text             = text
+	b.TextSize         = 15
+	b.TextColor3       = C_TEXT
+	b.AutoButtonColor  = true
+	b.Parent           = bar
+	uiCorner(6, b)
+	addStroke(b, C_BORDER, 1)
+	return b
+end
+
+local exitBtn     = makeCtrlButton("✕", -34, C_ON_REDX)
+local minimizeBtn = makeCtrlButton("–", -64, C_BTN)
+
+--==================================================================
+-- Tab bar (3 tabs)
+--==================================================================
+local tabBar = Instance.new("Frame")
+tabBar.Name             = "TabBar"
+tabBar.Size             = UDim2.new(1, 0, 0, 34)
+tabBar.Position         = UDim2.new(0, 0, 0, 40)
+tabBar.BackgroundColor3 = C_BG
+tabBar.BorderSizePixel  = 0
+tabBar.Parent           = main
+
+local function makeTab(text: string, index: number): TextButton
+	local b = Instance.new("TextButton")
+	b.Size             = UDim2.new(1/4, -7, 0, 26)
+	b.Position         = UDim2.new(index / 4, 5, 0, 4)
+	b.BackgroundColor3 = C_TAB_OFF
+	b.BorderSizePixel  = 0
+	b.Font             = Enum.Font.GothamMedium
+	b.Text             = text
+	b.TextSize         = 12
+	b.TextColor3       = C_DIM
+	b.AutoButtonColor  = true
+	b.Parent           = tabBar
+	uiCorner(6, b)
+	addStroke(b, C_BORDER, 1)
+	return b
+end
+
+local tabEffects   = makeTab("Effects", 0)
+local tabDisguises = makeTab("Disguises", 1)
+local tabMafia     = makeTab("Mafia", 2)
+local tabMisc      = makeTab("Misc", 3)
+
+local content = Instance.new("Frame")
+content.Name                   = "Content"
+content.BackgroundTransparency = 1
+content.Position               = UDim2.new(0, 8, 0, 80)
+content.Size                   = UDim2.new(1, -16, 1, -88)
+content.Parent                 = main
+
+--==================================================================
+-- Shared builders
+--==================================================================
+local function makeButton(text: string, parent: Instance): TextButton
+	local b = Instance.new("TextButton")
+	b.BackgroundColor3 = C_BTN
+	b.BorderSizePixel  = 0
+	b.Font             = Enum.Font.GothamMedium
+	b.Text             = text
+	b.TextSize         = 12
+	b.TextColor3       = C_TEXT
+	b.AutoButtonColor  = true
+	b.Parent           = parent
+	uiCorner(6, b)
+	addStroke(b, C_BORDER, 1)
+	return b
+end
+
+-- Standard ON/OFF styling for a toggle button.
+local function styleToggle(btn: TextButton, on: boolean)
+	btn.BackgroundColor3 = on and C_TAB_ON or C_BTN
+	local s = strokeOf(btn)
+	if s then s.Color = on and C_BORDER_HL or C_BORDER end
+end
+
+--==================================================================
+-- Effects page
+--==================================================================
+local effectsPage = Instance.new("Frame")
+effectsPage.Name                   = "EffectsPage"
+effectsPage.BackgroundTransparency = 1
+effectsPage.Size                   = UDim2.new(1, 0, 1, 0)
+effectsPage.Parent                 = content
+
+-- Row 1: Clear + fire count
+local eToolbar = Instance.new("Frame")
+eToolbar.Size             = UDim2.new(1, 0, 0, 30)
+eToolbar.BackgroundColor3 = C_PANEL
+eToolbar.BorderSizePixel  = 0
+eToolbar.Parent           = effectsPage
+uiCorner(8, eToolbar)
+addStroke(eToolbar, C_BORDER, 1)
+
+local clearBtn = makeButton("Clear", eToolbar)
+clearBtn.Size     = UDim2.new(0, 58, 0, 22)
+clearBtn.Position = UDim2.new(0, 8, 0.5, -11)
+
+local eCount = Instance.new("TextLabel")
+eCount.BackgroundTransparency = 1
+eCount.Size           = UDim2.new(0, 90, 1, 0)
+eCount.Position       = UDim2.new(1, -100, 0, 0)
+eCount.Font           = Enum.Font.Gotham
+eCount.Text           = "Fires: 0"
+eCount.TextSize       = 12
+eCount.TextColor3     = C_DIM
+eCount.TextXAlignment = Enum.TextXAlignment.Right
+eCount.Parent         = eToolbar
+
+-- Settings panel: three stacked toggle buttons
+local settingsPanel = Instance.new("Frame")
+settingsPanel.Size             = UDim2.new(1, 0, 0, 130)
+settingsPanel.Position         = UDim2.new(0, 0, 0, 36)
+settingsPanel.BackgroundColor3 = C_PANEL
+settingsPanel.BorderSizePixel  = 0
+settingsPanel.Parent           = effectsPage
+uiCorner(8, settingsPanel)
+addStroke(settingsPanel, C_BORDER, 1)
+
+local hlToggle = makeButton("Highlight Killer: OFF", settingsPanel)
+hlToggle.Size     = UDim2.new(1, -16, 0, 26)
+hlToggle.Position = UDim2.new(0, 8, 0, 8)
+
+local fbToggle = makeButton("Fullbright: OFF", settingsPanel)
+fbToggle.Size     = UDim2.new(1, -16, 0, 26)
+fbToggle.Position = UDim2.new(0, 8, 0, 38)
+
+local shotsToggle = makeButton("Shots & Stabs Only: ON", settingsPanel)
+shotsToggle.Size     = UDim2.new(1, -16, 0, 26)
+shotsToggle.Position = UDim2.new(0, 8, 0, 68)
+
+local discToggle = makeButton("Discussion Filter: OFF", settingsPanel)
+discToggle.Size     = UDim2.new(0.6, -8, 0, 26)
+discToggle.Position = UDim2.new(0, 8, 0, 98)
+
+local musicLbl = Instance.new("TextLabel")
+musicLbl.BackgroundTransparency = 1
+musicLbl.Size           = UDim2.new(0.4, -14, 0, 26)
+musicLbl.Position       = UDim2.new(0.6, 6, 0, 98)
+musicLbl.Font           = Enum.Font.Gotham
+musicLbl.Text           = "♪ —"
+musicLbl.TextSize       = 11
+musicLbl.TextColor3     = C_DIM
+musicLbl.TextXAlignment = Enum.TextXAlignment.Right
+musicLbl.TextTruncate   = Enum.TextTruncate.AtEnd
+musicLbl.Parent         = settingsPanel
+
+local eList = Instance.new("ScrollingFrame")
+eList.Size                   = UDim2.new(1, 0, 1, -172)
+eList.Position               = UDim2.new(0, 0, 0, 172)
+eList.BackgroundTransparency = 1
+eList.BorderSizePixel        = 0
+eList.ScrollBarThickness     = 4
+eList.ScrollBarImageColor3   = C_BORDER_HL
+eList.CanvasSize             = UDim2.new(0, 0, 0, 0)
+eList.AutomaticCanvasSize    = Enum.AutomaticSize.Y
+eList.ScrollingDirection     = Enum.ScrollingDirection.Y
+eList.Parent                 = effectsPage
+do
+	local l = Instance.new("UIListLayout")
+	l.Padding             = UDim.new(0, 6)
+	l.SortOrder           = Enum.SortOrder.LayoutOrder
+	l.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	l.Parent              = eList
+	local p = Instance.new("UIPadding")
+	p.PaddingTop    = UDim.new(0, 4)
+	p.PaddingBottom = UDim.new(0, 4)
+	p.Parent        = eList
+end
+
+--==================================================================
+-- Disguises page
+--==================================================================
+local disguisePage = Instance.new("Frame")
+disguisePage.Name                   = "DisguisePage"
+disguisePage.BackgroundTransparency = 1
+disguisePage.Size                   = UDim2.new(1, 0, 1, 0)
+disguisePage.Visible                = false
+disguisePage.Parent                 = content
+
+local dHeader = Instance.new("TextLabel")
+dHeader.BackgroundTransparency = 1
+dHeader.Size           = UDim2.new(0.6, 0, 0, 22)
+dHeader.Position       = UDim2.new(0, 4, 0, 0)
+dHeader.Font           = Enum.Font.GothamMedium
+dHeader.Text           = "Player = Disguise"
+dHeader.TextSize       = 12
+dHeader.TextColor3     = C_DIM
+dHeader.TextXAlignment = Enum.TextXAlignment.Left
+dHeader.Parent         = disguisePage
+
+local dCount = Instance.new("TextLabel")
+dCount.BackgroundTransparency = 1
+dCount.Size           = UDim2.new(0.4, -4, 0, 22)
+dCount.Position       = UDim2.new(0.6, 0, 0, 0)
+dCount.Font           = Enum.Font.Gotham
+dCount.Text           = "Players: 0"
+dCount.TextSize       = 12
+dCount.TextColor3     = C_DIM
+dCount.TextXAlignment = Enum.TextXAlignment.Right
+dCount.Parent         = disguisePage
+
+local dLegend = Instance.new("TextLabel")
+dLegend.BackgroundTransparency = 1
+dLegend.Size           = UDim2.new(1, -4, 0, 16)
+dLegend.Position       = UDim2.new(0, 4, 0, 22)
+dLegend.Font           = Enum.Font.Gotham
+dLegend.Text           = "Red = seen killing in the Effects tab"
+dLegend.TextSize       = 11
+dLegend.TextColor3     = C_KILLER
+dLegend.TextXAlignment = Enum.TextXAlignment.Left
+dLegend.Parent         = disguisePage
+
+local disgHlToggle = makeButton("Highlight Disguises: OFF", disguisePage)
+disgHlToggle.Size     = UDim2.new(1, -8, 0, 26)
+disgHlToggle.Position = UDim2.new(0, 4, 0, 42)
+
+local dList = Instance.new("ScrollingFrame")
+dList.Size                   = UDim2.new(1, 0, 1, -74)
+dList.Position               = UDim2.new(0, 0, 0, 74)
+dList.BackgroundTransparency = 1
+dList.BorderSizePixel        = 0
+dList.ScrollBarThickness     = 4
+dList.ScrollBarImageColor3   = C_BORDER_HL
+dList.CanvasSize             = UDim2.new(0, 0, 0, 0)
+dList.AutomaticCanvasSize    = Enum.AutomaticSize.Y
+dList.ScrollingDirection     = Enum.ScrollingDirection.Y
+dList.Parent                 = disguisePage
+do
+	local l = Instance.new("UIListLayout")
+	l.Padding             = UDim.new(0, 4)
+	l.SortOrder           = Enum.SortOrder.LayoutOrder
+	l.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	l.Parent              = dList
+	local p = Instance.new("UIPadding")
+	p.PaddingTop    = UDim.new(0, 2)
+	p.PaddingBottom = UDim.new(0, 4)
+	p.Parent        = dList
+end
+
+--==================================================================
+-- Mafia page
+--==================================================================
+local mafiaPage = Instance.new("Frame")
+mafiaPage.Name                   = "MafiaPage"
+mafiaPage.BackgroundTransparency = 1
+mafiaPage.Size                   = UDim2.new(1, 0, 1, 0)
+mafiaPage.Visible                = false
+mafiaPage.Parent                 = content
+
+local mHeader = Instance.new("TextLabel")
+mHeader.BackgroundTransparency = 1
+mHeader.Size           = UDim2.new(1, -4, 0, 18)
+mHeader.Position       = UDim2.new(0, 4, 0, 0)
+mHeader.Font           = Enum.Font.GothamMedium
+mHeader.Text           = "Target  (disguise name or username)"
+mHeader.TextSize       = 12
+mHeader.TextColor3     = C_DIM
+mHeader.TextXAlignment = Enum.TextXAlignment.Left
+mHeader.Parent         = mafiaPage
+
+local targetBox = Instance.new("TextBox")
+targetBox.Size                   = UDim2.new(1, -8, 0, 34)
+targetBox.Position               = UDim2.new(0, 4, 0, 22)
+targetBox.BackgroundColor3       = C_PANEL
+targetBox.BorderSizePixel        = 0
+targetBox.Font                   = Enum.Font.Gotham
+targetBox.PlaceholderText        = "type a disguise name or a username"
+targetBox.PlaceholderColor3      = C_DIM
+targetBox.Text                   = ""
+targetBox.TextSize               = 13
+targetBox.TextColor3             = C_TEXT
+targetBox.TextXAlignment         = Enum.TextXAlignment.Left
+targetBox.ClearTextOnFocus       = false
+targetBox.Parent                 = mafiaPage
+uiCorner(6, targetBox)
+addStroke(targetBox, C_BORDER, 1)
+do
+	local p = Instance.new("UIPadding")
+	p.PaddingLeft  = UDim.new(0, 10)
+	p.PaddingRight = UDim.new(0, 10)
+	p.Parent       = targetBox
+end
+
+local resolvedLbl = Instance.new("TextLabel")
+resolvedLbl.BackgroundTransparency = 1
+resolvedLbl.Size           = UDim2.new(1, -8, 0, 18)
+resolvedLbl.Position       = UDim2.new(0, 4, 0, 60)
+resolvedLbl.Font           = Enum.Font.Gotham
+resolvedLbl.Text           = "→ resolves to: —"
+resolvedLbl.TextSize       = 12
+resolvedLbl.TextColor3     = C_DIM
+resolvedLbl.TextXAlignment = Enum.TextXAlignment.Left
+resolvedLbl.TextTruncate   = Enum.TextTruncate.AtEnd
+resolvedLbl.Parent         = mafiaPage
+
+local function makeActionButton(text: string, y: number, accent: Color3): TextButton
+	local b = Instance.new("TextButton")
+	b.Size             = UDim2.new(1, -8, 0, 38)
+	b.Position         = UDim2.new(0, 4, 0, y)
+	b.BackgroundColor3 = C_BTN
+	b.BorderSizePixel  = 0
+	b.Font             = Enum.Font.GothamBold
+	b.Text             = text
+	b.TextSize         = 14
+	b.TextColor3       = C_TEXT
+	b.AutoButtonColor  = true
+	b.Parent           = mafiaPage
+	uiCorner(6, b)
+	addStroke(b, C_BORDER, 1)
+
+	local stripe = Instance.new("Frame")
+	stripe.Size             = UDim2.new(0, 3, 1, -14)
+	stripe.Position         = UDim2.new(0, 8, 0, 7)
+	stripe.BackgroundColor3 = accent
+	stripe.BorderSizePixel  = 0
+	stripe.Parent           = b
+	uiCorner(2, stripe)
+	return b
+end
+
+local stabBtn  = makeActionButton("Remote Stab",  86,  C_STAB)
+local shootBtn = makeActionButton("Remote Shoot", 130, C_SHOOT)
+local witchBtn = makeActionButton("Remote Witch", 174, C_WITCH)
+
+-- Teleport Stab: set apart from the others; TP to target, stab, TP back.
+local tpStabBtn = Instance.new("TextButton")
+tpStabBtn.Size             = UDim2.new(1, -8, 0, 44)
+tpStabBtn.Position         = UDim2.new(0, 4, 0, 232)
+tpStabBtn.BackgroundColor3 = C_BTN
+tpStabBtn.BorderSizePixel  = 0
+tpStabBtn.Text             = ""
+tpStabBtn.AutoButtonColor  = true
+tpStabBtn.Parent           = mafiaPage
+uiCorner(6, tpStabBtn)
+addStroke(tpStabBtn, C_BORDER, 1)
+do
+	local stripe = Instance.new("Frame")
+	stripe.Size             = UDim2.new(0, 3, 1, -14)
+	stripe.Position         = UDim2.new(0, 8, 0, 7)
+	stripe.BackgroundColor3 = C_STAB
+	stripe.BorderSizePixel  = 0
+	stripe.Parent           = tpStabBtn
+	uiCorner(2, stripe)
+end
+
+local tpStabMain = Instance.new("TextLabel")
+tpStabMain.BackgroundTransparency = 1
+tpStabMain.Size           = UDim2.new(1, -16, 0, 18)
+tpStabMain.Position       = UDim2.new(0, 8, 0, 6)
+tpStabMain.Font           = Enum.Font.GothamBold
+tpStabMain.Text           = "Teleport Stab"
+tpStabMain.TextSize       = 14
+tpStabMain.TextColor3     = C_TEXT
+tpStabMain.TextXAlignment = Enum.TextXAlignment.Center
+tpStabMain.Parent         = tpStabBtn
+
+local tpStabCap = Instance.new("TextLabel")
+tpStabCap.BackgroundTransparency = 1
+tpStabCap.Size           = UDim2.new(1, -16, 0, 14)
+tpStabCap.Position       = UDim2.new(0, 8, 0, 24)
+tpStabCap.Font           = Enum.Font.Gotham
+tpStabCap.Text           = "(Risky, use with EMP)"
+tpStabCap.TextSize       = 11
+tpStabCap.TextColor3     = C_STAB
+tpStabCap.TextXAlignment = Enum.TextXAlignment.Center
+tpStabCap.Parent         = tpStabBtn
+
+-- Teleport-stab timing slider
+local sliderLabel = Instance.new("TextLabel")
+sliderLabel.BackgroundTransparency = 1
+sliderLabel.Size           = UDim2.new(1, -8, 0, 14)
+sliderLabel.Position       = UDim2.new(0, 4, 0, 280)
+sliderLabel.Font           = Enum.Font.Gotham
+sliderLabel.Text           = "Teleport frames: 1  •  frames to complete (0 = instant)"
+sliderLabel.TextSize       = 11
+sliderLabel.TextColor3     = C_DIM
+sliderLabel.TextXAlignment = Enum.TextXAlignment.Left
+sliderLabel.TextTruncate   = Enum.TextTruncate.AtEnd
+sliderLabel.Parent         = mafiaPage
+
+local sliderTrack = Instance.new("Frame")
+sliderTrack.Size             = UDim2.new(1, -8, 0, 6)
+sliderTrack.Position         = UDim2.new(0, 4, 0, 305)
+sliderTrack.BackgroundColor3 = C_BG
+sliderTrack.BorderSizePixel  = 0
+sliderTrack.Parent           = mafiaPage
+uiCorner(3, sliderTrack)
+addStroke(sliderTrack, C_BORDER, 1)
+
+local sliderFill = Instance.new("Frame")
+sliderFill.Size             = UDim2.new(0, 0, 1, 0)
+sliderFill.BackgroundColor3 = C_BORDER_HL
+sliderFill.BorderSizePixel  = 0
+sliderFill.Parent           = sliderTrack
+uiCorner(3, sliderFill)
+
+local sliderKnob = Instance.new("Frame")
+sliderKnob.Size             = UDim2.new(0, 14, 0, 14)
+sliderKnob.Position         = UDim2.new(0, -7, 0.5, -7)
+sliderKnob.BackgroundColor3 = C_TEXT
+sliderKnob.BorderSizePixel  = 0
+sliderKnob.ZIndex           = 2
+sliderKnob.Parent           = sliderTrack
+uiCorner(7, sliderKnob)
+addStroke(sliderKnob, C_BORDER_HL, 1)
+
+local sliderHit = Instance.new("TextButton")
+sliderHit.Size                   = UDim2.new(1, -8, 0, 22)
+sliderHit.Position               = UDim2.new(0, 4, 0, 297)
+sliderHit.BackgroundTransparency = 1
+sliderHit.Text                   = ""
+sliderHit.AutoButtonColor        = false
+sliderHit.ZIndex                 = 3
+sliderHit.Parent                 = mafiaPage
+
+local mStatus = Instance.new("TextLabel")
+mStatus.BackgroundTransparency = 1
+mStatus.Size           = UDim2.new(1, -8, 0, 20)
+mStatus.Position       = UDim2.new(0, 4, 0, 326)
+mStatus.Font           = Enum.Font.Gotham
+mStatus.Text           = "Last action: —"
+mStatus.TextSize       = 12
+mStatus.TextColor3     = C_DIM
+mStatus.TextXAlignment = Enum.TextXAlignment.Left
+mStatus.TextTruncate   = Enum.TextTruncate.AtEnd
+mStatus.Parent         = mafiaPage
+
+--==================================================================
+-- Misc page
+--==================================================================
+local miscPage = Instance.new("Frame")
+miscPage.Name                   = "MiscPage"
+miscPage.BackgroundTransparency = 1
+miscPage.Size                   = UDim2.new(1, 0, 1, 0)
+miscPage.Visible                = false
+miscPage.Parent                 = content
+
+local noclipToggle = makeButton("No Clip: OFF", miscPage)
+noclipToggle.Size     = UDim2.new(1, -8, 0, 34)
+noclipToggle.Position = UDim2.new(0, 4, 0, 4)
+noclipToggle.Font     = Enum.Font.GothamBold
+noclipToggle.TextSize = 14
+
+local tpHeader = Instance.new("TextLabel")
+tpHeader.BackgroundTransparency = 1
+tpHeader.Size           = UDim2.new(1, -8, 0, 18)
+tpHeader.Position       = UDim2.new(0, 4, 0, 48)
+tpHeader.Font           = Enum.Font.GothamMedium
+tpHeader.Text           = "Disguise Teleport"
+tpHeader.TextSize       = 12
+tpHeader.TextColor3     = C_DIM
+tpHeader.TextXAlignment = Enum.TextXAlignment.Left
+tpHeader.Parent         = miscPage
+
+local tpBtn = makeButton("Teleport to Disguise", miscPage)
+tpBtn.Size     = UDim2.new(1, -8, 0, 36)
+tpBtn.Position = UDim2.new(0, 4, 0, 70)
+tpBtn.Font     = Enum.Font.GothamBold
+tpBtn.TextSize = 14
+
+local tpBox = Instance.new("TextBox")
+tpBox.Size                  = UDim2.new(1, -8, 0, 34)
+tpBox.Position              = UDim2.new(0, 4, 0, 112)
+tpBox.BackgroundColor3      = C_PANEL
+tpBox.BorderSizePixel       = 0
+tpBox.Font                  = Enum.Font.Gotham
+tpBox.PlaceholderText       = "type a disguise name or a username"
+tpBox.PlaceholderColor3     = C_DIM
+tpBox.Text                  = ""
+tpBox.TextSize              = 13
+tpBox.TextColor3            = C_TEXT
+tpBox.TextXAlignment        = Enum.TextXAlignment.Left
+tpBox.ClearTextOnFocus      = false
+tpBox.Parent                = miscPage
+uiCorner(6, tpBox)
+addStroke(tpBox, C_BORDER, 1)
+do
+	local p = Instance.new("UIPadding")
+	p.PaddingLeft  = UDim.new(0, 10)
+	p.PaddingRight = UDim.new(0, 10)
+	p.Parent       = tpBox
+end
+
+local tpResolved = Instance.new("TextLabel")
+tpResolved.BackgroundTransparency = 1
+tpResolved.Size           = UDim2.new(1, -8, 0, 18)
+tpResolved.Position       = UDim2.new(0, 4, 0, 150)
+tpResolved.Font           = Enum.Font.Gotham
+tpResolved.Text           = "→ resolves to: —"
+tpResolved.TextSize       = 12
+tpResolved.TextColor3     = C_DIM
+tpResolved.TextXAlignment = Enum.TextXAlignment.Left
+tpResolved.TextTruncate   = Enum.TextTruncate.AtEnd
+tpResolved.Parent         = miscPage
+
+local miscStatus = Instance.new("TextLabel")
+miscStatus.BackgroundTransparency = 1
+miscStatus.Size           = UDim2.new(1, -8, 0, 20)
+miscStatus.Position       = UDim2.new(0, 4, 0, 174)
+miscStatus.Font           = Enum.Font.Gotham
+miscStatus.Text           = "Last action: —"
+miscStatus.TextSize       = 12
+miscStatus.TextColor3     = C_DIM
+miscStatus.TextXAlignment = Enum.TextXAlignment.Left
+miscStatus.TextTruncate   = Enum.TextTruncate.AtEnd
+miscStatus.Parent         = miscPage
+
+--==================================================================
+-- Tab switching
+--==================================================================
+local function styleTab(tab: TextButton, active: boolean)
+	tab.BackgroundColor3 = active and C_TAB_ON or C_TAB_OFF
+	tab.TextColor3       = active and C_TEXT or C_DIM
+	local s = strokeOf(tab)
+	if s then s.Color = active and C_BORDER_HL or C_BORDER end
+end
+
+local function setActiveTab(which: string)
+	effectsPage.Visible  = (which == "effects")
+	disguisePage.Visible = (which == "disguises")
+	mafiaPage.Visible    = (which == "mafia")
+	miscPage.Visible     = (which == "misc")
+	styleTab(tabEffects,   which == "effects")
+	styleTab(tabDisguises, which == "disguises")
+	styleTab(tabMafia,     which == "mafia")
+	styleTab(tabMisc,      which == "misc")
+	if which == "disguises" and refreshDisguises then refreshDisguises() end
+end
+
+tabEffects.MouseButton1Click:Connect(function() setActiveTab("effects") end)
+tabDisguises.MouseButton1Click:Connect(function() setActiveTab("disguises") end)
+tabMafia.MouseButton1Click:Connect(function() setActiveTab("mafia") end)
+tabMisc.MouseButton1Click:Connect(function() setActiveTab("misc") end)
+setActiveTab("effects")
+
+--==================================================================
+-- Dragging
+--==================================================================
+local dragMoveConn: RBXScriptConnection
+do
+	local dragging = false
+	local dragStart: Vector3, startPos: UDim2
+	bar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragging  = true
+			dragStart = input.Position
+			startPos  = main.Position
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
+		end
+	end)
+	dragMoveConn = UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch) then
+			local delta = input.Position - dragStart
+			main.Position = UDim2.new(
+				startPos.X.Scale, startPos.X.Offset + delta.X,
+				startPos.Y.Scale, startPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+end
+
+--==================================================================
+-- Effect result cards
+--==================================================================
+local function makeRow(parent: Instance, y: number, prefix: string, value: string, valueColor: Color3)
+	local pre = Instance.new("TextLabel")
+	pre.BackgroundTransparency = 1
+	pre.Size           = UDim2.new(0, 70, 0, 18)
+	pre.Position       = UDim2.new(0, 20, 0, y)
+	pre.Font           = Enum.Font.Gotham
+	pre.Text           = prefix
+	pre.TextSize       = 14
+	pre.TextColor3     = C_DIM
+	pre.TextXAlignment = Enum.TextXAlignment.Left
+	pre.Parent         = parent
+
+	local val = Instance.new("TextLabel")
+	val.BackgroundTransparency = 1
+	val.Size           = UDim2.new(1, -96, 0, 18)
+	val.Position       = UDim2.new(0, 86, 0, y)
+	val.Font           = Enum.Font.GothamBold
+	val.Text           = value
+	val.TextSize       = 14
+	val.TextColor3     = valueColor
+	val.TextXAlignment = Enum.TextXAlignment.Left
+	val.TextTruncate   = Enum.TextTruncate.AtEnd
+	val.Parent         = parent
+end
+
+local resultCount = 0 -- counted (non-ignored) fires
+local cardOrder   = 0 -- monotonic ordering for every card, ignored or not
+
+local function addResult(killType: any, killer: any, victim: any, ignored: boolean)
+	cardOrder += 1
+
+	local killerName = nameOf(killer)
+	local victimName = nameOf(victim)
+	local typeText   = killType ~= nil and tostring(killType) or "?"
+	local verb       = verbFor(killType)
+	local accent     = ignored and C_VIGIL or colorFor(killType)
+	local stamp      = os.date("%H:%M:%S")
+	local recordedKiller: string? = nil  -- set if this card credits a killer
+
+	print(string.format("[Identity Monitor] %s%s | Killer: %s | %s: %s",
+		ignored and "(discussion/vigilante) " or "", typeText, killerName, verb, victimName))
+
+	-- Only real (non-discussion) kills count and flag a killer.
+	if not ignored then
+		resultCount += 1
+		eCount.Text = "Fires: " .. tostring(resultCount)
+		if killerName ~= "" and killerName ~= "?" then
+			recordedKiller = killerName
+			killersSeen[killerName] = (killersSeen[killerName] or 0) + 1
+			if updateHighlights then updateHighlights() end
+			if refreshDisguises then refreshDisguises() end
+		end
+	end
+
+	local card = Instance.new("Frame")
+	card.Size                   = UDim2.new(1, -6, 0, ignored and 92 or 74)
+	card.BackgroundColor3       = C_CARD
+	card.BackgroundTransparency = ignored and 0.35 or 0
+	card.BorderSizePixel        = 0
+	card.LayoutOrder            = cardOrder
+	card.Parent                 = eList
+	uiCorner(8, card)
+	addStroke(card, C_BORDER, 1)
+
+	local stripe = Instance.new("Frame")
+	stripe.Size             = UDim2.new(0, 3, 1, -14)
+	stripe.Position         = UDim2.new(0, 8, 0, 7)
+	stripe.BackgroundColor3 = accent
+	stripe.BorderSizePixel  = 0
+	stripe.Parent           = card
+	uiCorner(2, stripe)
+
+	local header = Instance.new("TextLabel")
+	header.BackgroundTransparency = 1
+	header.Size           = UDim2.new(1, -52, 0, 20)
+	header.Position       = UDim2.new(0, 20, 0, 6)
+	header.Font           = Enum.Font.GothamBold
+	header.Text           = string.format("%s   •   %s", typeText, stamp)
+	header.TextSize       = 13
+	header.TextColor3     = accent
+	header.TextXAlignment = Enum.TextXAlignment.Left
+	header.TextTruncate   = Enum.TextTruncate.AtEnd
+	header.Parent         = card
+
+	local valueColor = ignored and C_DIM or C_TEXT
+	makeRow(card, 28, "Killer:", killerName, valueColor)
+	makeRow(card, 48, verb .. ":", victimName, valueColor)
+
+	if ignored then
+		local tag = Instance.new("TextLabel")
+		tag.BackgroundTransparency = 1
+		tag.Size           = UDim2.new(1, -28, 0, 16)
+		tag.Position       = UDim2.new(0, 20, 0, 70)
+		tag.Font           = Enum.Font.GothamMedium
+		tag.Text           = "⚖ discussion — vigilante, not counted"
+		tag.TextSize       = 11
+		tag.TextColor3     = C_VIGIL
+		tag.TextXAlignment = Enum.TextXAlignment.Left
+		tag.TextTruncate   = Enum.TextTruncate.AtEnd
+		tag.Parent         = card
+	end
+
+	-- Remove button: deletes this card and undoes what it recorded.
+	local removeBtn = Instance.new("TextButton")
+	removeBtn.Size             = UDim2.fromOffset(18, 18)
+	removeBtn.Position         = UDim2.new(1, -24, 0, 6)
+	removeBtn.BackgroundColor3 = C_BTN
+	removeBtn.BorderSizePixel  = 0
+	removeBtn.Font             = Enum.Font.GothamBold
+	removeBtn.Text             = "✕"
+	removeBtn.TextSize         = 12
+	removeBtn.TextColor3       = C_DIM
+	removeBtn.AutoButtonColor  = true
+	removeBtn.Parent           = card
+	uiCorner(4, removeBtn)
+	addStroke(removeBtn, C_BORDER, 1)
+
+	removeBtn.MouseButton1Click:Connect(function()
+		-- Un-credit the killer this card recorded; drop the flag if it hits 0.
+		if recordedKiller then
+			local left = (killersSeen[recordedKiller] or 0) - 1
+			if left > 0 then
+				killersSeen[recordedKiller] = left
+			else
+				killersSeen[recordedKiller] = nil
+			end
+			recordedKiller = nil
+			if updateHighlights then updateHighlights() end
+			if refreshDisguises then refreshDisguises() end
+		end
+		if not ignored and resultCount > 0 then
+			resultCount -= 1
+			eCount.Text = "Fires: " .. tostring(resultCount)
+		end
+		card:Destroy()
+	end)
+
+	task.defer(function()
+		eList.CanvasPosition = Vector2.new(0, eList.AbsoluteCanvasSize.Y)
+	end)
+end
+
+--==================================================================
+-- Disguise rows
+--==================================================================
+local function getDisguiseName(plr: Player): string
+	local char = plr.Character
+	if not char then return "(no character)" end
+	if char.Name == plr.Name then return "(not disguised)" end
+	return char.Name
+end
+
+local function isKnownKiller(plr: Player, disguise: string): boolean
+	if disguise ~= "" and killersSeen[disguise] then return true end
+	if killersSeen[plr.Name] then return true end
+	local char = plr.Character
+	if char and killersSeen[char.Name] then return true end
+	return false
+end
+
+local function makeDisguiseRow(order: number, plr: Player, disguise: string, killer: boolean)
+	local row = Instance.new("Frame")
+	row.Size             = UDim2.new(1, -6, 0, 48)
+	row.BackgroundColor3 = C_CARD
+	row.BorderSizePixel  = 0
+	row.LayoutOrder      = order
+	row.Parent           = dList
+	uiCorner(6, row)
+	addStroke(row, C_BORDER, 1)
+
+	local stripe = Instance.new("Frame")
+	stripe.Size             = UDim2.new(0, 3, 1, -14)
+	stripe.Position         = UDim2.new(0, 8, 0, 7)
+	stripe.BackgroundColor3 = killer and C_KILLER or C_NEUTRAL
+	stripe.BorderSizePixel  = 0
+	stripe.Parent           = row
+	uiCorner(2, stripe)
+
+	local nameText = plr.Name
+	if plr.DisplayName ~= plr.Name then
+		nameText = plr.DisplayName .. " (@" .. plr.Name .. ")"
+	end
+	if plr == localPlayer then
+		nameText = nameText .. "  (you)"
+	end
+
+	local nameLbl = Instance.new("TextLabel")
+	nameLbl.BackgroundTransparency = 1
+	nameLbl.Size           = UDim2.new(1, killer and -78 or -24, 0, 20)
+	nameLbl.Position       = UDim2.new(0, 20, 0, 5)
+	nameLbl.Font           = Enum.Font.GothamMedium
+	nameLbl.Text           = nameText
+	nameLbl.TextSize       = 13
+	nameLbl.TextColor3     = C_TEXT
+	nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+	nameLbl.TextTruncate   = Enum.TextTruncate.AtEnd
+	nameLbl.Parent         = row
+
+	local disgLbl = Instance.new("TextLabel")
+	disgLbl.BackgroundTransparency = 1
+	disgLbl.Size           = UDim2.new(1, -24, 0, 18)
+	disgLbl.Position       = UDim2.new(0, 20, 0, 25)
+	disgLbl.Font           = Enum.Font.GothamBold
+	disgLbl.Text           = "= " .. disguise
+	disgLbl.TextSize       = 13
+	disgLbl.TextColor3     = killer and C_KILLER or C_DISGUISE
+	disgLbl.TextXAlignment = Enum.TextXAlignment.Left
+	disgLbl.TextTruncate   = Enum.TextTruncate.AtEnd
+	disgLbl.Parent         = row
+
+	if killer then
+		local badge = Instance.new("TextLabel")
+		badge.Size             = UDim2.new(0, 52, 0, 18)
+		badge.Position         = UDim2.new(1, -60, 0, 6)
+		badge.BackgroundColor3 = C_KILLER
+		badge.BorderSizePixel  = 0
+		badge.Font             = Enum.Font.GothamBold
+		badge.Text             = "KILLER"
+		badge.TextSize         = 11
+		badge.TextColor3       = Color3.fromRGB(255, 255, 255)
+		badge.Parent           = row
+		uiCorner(4, badge)
+	end
+end
+
+-- Auto-build the disguise -> true-username lookup from live player data.
+local function rebuildDisguiseLookup()
+	table.clear(disguiseLookup)
+	for _, plr in ipairs(Players:GetPlayers()) do
+		local uname = plr.Name
+		disguiseLookup[string.lower(uname)] = uname
+		if plr.DisplayName ~= "" and plr.DisplayName ~= uname then
+			disguiseLookup[string.lower(plr.DisplayName)] = uname
+		end
+		local disguise = getDisguiseName(plr)
+		if disguise ~= "(no character)" and disguise ~= "(not disguised)" then
+			disguiseLookup[string.lower(disguise)] = uname
+		end
+	end
+end
+
+-- Unified highlight pass. Killer red always wins; disguised non-killers (and
+-- killers, when the killer toggle is off) get white; name tags show for any
+-- disguised player while the disguise highlight is on.
+updateHighlights = function()
+	for _, plr in ipairs(Players:GetPlayers()) do
+		local disguised, char, disguise = isDisguised(plr)
+		if char then
+			local killer = isKnownKiller(plr, disguise or "")
+			local kind: string? = nil
+			if highlightEnabled and killer then
+				kind = "killer"
+			elseif disguiseHlEnabled and disguised then
+				kind = "disguise"
+			end
+			setCharHighlight(char, kind)
+			if disguiseHlEnabled and disguised then
+				setCharTag(char, disguise)
+			else
+				setCharTag(char, nil)
+			end
+		end
+	end
+end
+
+refreshDisguises = function()
+	rebuildDisguiseLookup()
+
+	for _, c in ipairs(dList:GetChildren()) do
+		if c:IsA("Frame") then c:Destroy() end
+	end
+
+	local players = Players:GetPlayers()
+	table.sort(players, function(a, b)
+		return string.lower(a.Name) < string.lower(b.Name)
+	end)
+
+	local killerCount = 0
+	for i, plr in ipairs(players) do
+		local disguise = getDisguiseName(plr)
+		local killer = isKnownKiller(plr, disguise ~= "(no character)" and disguise ~= "(not disguised)" and disguise or "")
+		if killer then killerCount += 1 end
+		makeDisguiseRow(i, plr, disguise, killer)
+	end
+
+	dCount.Text = string.format("Players: %d  ·  Killers: %d", #players, killerCount)
+end
+
+--==================================================================
+-- Wiring
+--==================================================================
+clearBtn.MouseButton1Click:Connect(function()
+	for _, child in ipairs(eList:GetChildren()) do
+		if child:IsA("Frame") then child:Destroy() end
+	end
+	resultCount = 0
+	cardOrder   = 0
+	eCount.Text = "Fires: 0"
+	-- Clearing the list also clears every recorded killer.
+	table.clear(killersSeen)
+	if updateHighlights then updateHighlights() end
+	if refreshDisguises then refreshDisguises() end
+end)
+
+local function updateHlButton()
+	hlToggle.Text = "Highlight Killer: " .. (highlightEnabled and "ON" or "OFF")
+	styleToggle(hlToggle, highlightEnabled)
+end
+hlToggle.MouseButton1Click:Connect(function()
+	highlightEnabled = not highlightEnabled
+	updateHlButton()
+	if updateHighlights then updateHighlights() end
+end)
+updateHlButton()
+
+local function updateFbButton()
+	fbToggle.Text = "Fullbright: " .. (fullbrightEnabled and "ON" or "OFF")
+	styleToggle(fbToggle, fullbrightEnabled)
+end
+fbToggle.MouseButton1Click:Connect(function()
+	fullbrightEnabled = not fullbrightEnabled
+	setFullbright(fullbrightEnabled)
+	updateFbButton()
+end)
+updateFbButton()
+
+local function updateShotsButton()
+	shotsToggle.Text = "Shots & Stabs Only: " .. (killsOnlyEnabled and "ON" or "OFF")
+	styleToggle(shotsToggle, killsOnlyEnabled)
+end
+shotsToggle.MouseButton1Click:Connect(function()
+	killsOnlyEnabled = not killsOnlyEnabled
+	updateShotsButton()
+end)
+updateShotsButton()
+
+local function updateDiscButton()
+	discToggle.Text = "Discussion Filter: " .. (discussionFilterEnabled and "ON" or "OFF")
+	styleToggle(discToggle, discussionFilterEnabled)
+end
+discToggle.MouseButton1Click:Connect(function()
+	discussionFilterEnabled = not discussionFilterEnabled
+	updateDiscButton()
+end)
+updateDiscButton()
+
+local function updateDisgHlButton()
+	disgHlToggle.Text = "Highlight Disguises: " .. (disguiseHlEnabled and "ON" or "OFF")
+	styleToggle(disgHlToggle, disguiseHlEnabled)
+end
+disgHlToggle.MouseButton1Click:Connect(function()
+	disguiseHlEnabled = not disguiseHlEnabled
+	updateDisgHlButton()
+	if updateHighlights then updateHighlights() end
+end)
+updateDisgHlButton()
+
+-- Mafia: live resolve preview + button actions
+local function updateResolved()
+	local target = resolveTarget(targetBox.Text)
+	if target then
+		resolvedLbl.Text = "→ resolves to: " .. target
+		resolvedLbl.TextColor3 = C_DISGUISE
+	else
+		resolvedLbl.Text = "→ resolves to: —"
+		resolvedLbl.TextColor3 = C_DIM
+	end
+end
+targetBox:GetPropertyChangedSignal("Text"):Connect(updateResolved)
+
+local function runAction(label: string, fn: (string) -> ())
+	local target = resolveTarget(targetBox.Text)
+	if not target then
+		mStatus.Text = label .. ": no target entered"
+		mStatus.TextColor3 = C_KILLER
+		return
+	end
+	local ok, err = pcall(fn, target)
+	if ok then
+		mStatus.Text = string.format("Last action: %s → %s", label, target)
+		mStatus.TextColor3 = C_VIGIL
+	else
+		mStatus.Text = string.format("%s errored: %s", label, tostring(err))
+		mStatus.TextColor3 = C_KILLER
+	end
+end
+
+stabBtn.MouseButton1Click:Connect(function()  runAction("Stab",  remoteStab)  end)
+shootBtn.MouseButton1Click:Connect(function() runAction("Shoot", remoteShoot) end)
+witchBtn.MouseButton1Click:Connect(function() runAction("Witch", remoteWitch) end)
+
+-- Teleport-stab timing slider
+local function setTpFrames(v: number)
+	v = math.clamp(math.floor(v + 0.5), 0, MAX_TP_FRAMES)
+	tpStabFrames = v
+	local frac = v / MAX_TP_FRAMES
+	sliderFill.Size     = UDim2.new(frac, 0, 1, 0)
+	sliderKnob.Position = UDim2.new(frac, -7, 0.5, -7)
+	sliderLabel.Text = string.format(
+		"Teleport frames: %d  •  frames to complete (0 = instant)", v)
+end
+
+local function sliderSetFromX(px: number)
+	local w = sliderTrack.AbsoluteSize.X
+	if w <= 0 then return end
+	local frac = math.clamp((px - sliderTrack.AbsolutePosition.X) / w, 0, 1)
+	setTpFrames(frac * MAX_TP_FRAMES)
+end
+
+local sliderDragging = false
+local sliderMoveConn: RBXScriptConnection
+local sliderEndConn: RBXScriptConnection
+
+sliderHit.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+		sliderDragging = true
+		sliderSetFromX(input.Position.X)
+	end
+end)
+sliderMoveConn = UserInputService.InputChanged:Connect(function(input)
+	if sliderDragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch) then
+		sliderSetFromX(input.Position.X)
+	end
+end)
+sliderEndConn = UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+		sliderDragging = false
+	end
+end)
+setTpFrames(tpStabFrames)  -- initialise knob/fill/label at the default
+
+-- Teleport Stab: TP behind target -> wait tpStabFrames -> stab -> TP back.
+local tpStabBusy = false
+tpStabBtn.MouseButton1Click:Connect(function()
+	if tpStabBusy then return end
+	local target = resolveTarget(targetBox.Text)
+	if not target then
+		mStatus.Text = "Teleport Stab: no target entered"
+		mStatus.TextColor3 = C_KILLER
+		return
+	end
+	local targetPlayer = Players:FindFirstChild(target)
+	if not targetPlayer then
+		mStatus.Text = "Teleport Stab: player not found (" .. target .. ")"
+		mStatus.TextColor3 = C_KILLER
+		return
+	end
+	local tChar = targetPlayer.Character
+	local myChar = localPlayer.Character
+	local tRoot = tChar and (tChar:FindFirstChild("HumanoidRootPart") or tChar.PrimaryPart)
+	local myRoot = myChar and (myChar:FindFirstChild("HumanoidRootPart") or myChar.PrimaryPart)
+	if not tRoot or not myRoot then
+		mStatus.Text = "Teleport Stab: no character available"
+		mStatus.TextColor3 = C_KILLER
+		return
+	end
+
+	tpStabBusy = true
+	local returnCFrame = myRoot.CFrame
+	myRoot.CFrame = tRoot.CFrame * CFrame.new(0, 0, 3)  -- behind the target
+	for _ = 1, tpStabFrames do
+		RunService.Heartbeat:Wait()
+	end
+	pcall(remoteStab, target)
+	if myRoot and myRoot.Parent then
+		myRoot.CFrame = returnCFrame                     -- back to the start
+	end
+	tpStabBusy = false
+	mStatus.Text = "Teleport-stabbed " .. target
+	mStatus.TextColor3 = C_VIGIL
+end)
+
+-- Misc: no-clip toggle
+local function updateNoclipButton()
+	noclipToggle.Text = "No Clip: " .. (noclipEnabled and "ON" or "OFF")
+	styleToggle(noclipToggle, noclipEnabled)
+end
+noclipToggle.MouseButton1Click:Connect(function()
+	setNoclip(not noclipEnabled)
+	updateNoclipButton()
+end)
+updateNoclipButton()
+
+-- Misc: disguise teleport (same disguise -> username resolver as the Mafia tab)
+local function updateTpResolved()
+	local target = resolveTarget(tpBox.Text)
+	if target then
+		tpResolved.Text = "→ resolves to: " .. target
+		tpResolved.TextColor3 = C_DISGUISE
+	else
+		tpResolved.Text = "→ resolves to: —"
+		tpResolved.TextColor3 = C_DIM
+	end
+end
+tpBox:GetPropertyChangedSignal("Text"):Connect(updateTpResolved)
+
+tpBtn.MouseButton1Click:Connect(function()
+	local target = resolveTarget(tpBox.Text)
+	if not target then
+		miscStatus.Text = "Teleport: no target entered"
+		miscStatus.TextColor3 = C_KILLER
+		return
+	end
+	local targetPlayer = Players:FindFirstChild(target)
+	if not targetPlayer then
+		miscStatus.Text = "Teleport: player not found (" .. target .. ")"
+		miscStatus.TextColor3 = C_KILLER
+		return
+	end
+	local tChar = targetPlayer.Character
+	local myChar = localPlayer.Character
+	local tRoot = tChar and (tChar:FindFirstChild("HumanoidRootPart") or tChar.PrimaryPart)
+	local myRoot = myChar and (myChar:FindFirstChild("HumanoidRootPart") or myChar.PrimaryPart)
+	if not tRoot or not myRoot then
+		miscStatus.Text = "Teleport: no character available"
+		miscStatus.TextColor3 = C_KILLER
+		return
+	end
+	myRoot.CFrame = tRoot.CFrame * CFrame.new(0, 0, 3)  -- behind the target
+	miscStatus.Text = "Teleported behind " .. target
+	miscStatus.TextColor3 = C_VIGIL
+end)
+
+minimizeBtn.MouseButton1Click:Connect(function()
+	main.Visible = false
+end)
+
+--==================================================================
+-- Events
+--==================================================================
+local eventConn: RBXScriptConnection
+local musicConn: RBXScriptConnection
+local rightShiftConn: RBXScriptConnection
+
+rightShiftConn = UserInputService.InputBegan:Connect(function(input)
+	if input.KeyCode == Enum.KeyCode.RightShift then
+		main.Visible = not main.Visible
+	end
+end)
+
+exitBtn.MouseButton1Click:Connect(function()
+	if eventConn then eventConn:Disconnect() end
+	if musicConn then musicConn:Disconnect() end
+	if rightShiftConn then rightShiftConn:Disconnect() end
+	if dragMoveConn then dragMoveConn:Disconnect() end
+	if sliderMoveConn then sliderMoveConn:Disconnect() end
+	if sliderEndConn then sliderEndConn:Disconnect() end
+	if fbChangedConn then fbChangedConn:Disconnect() end
+	clearAllHighlights()
+	if fullbrightEnabled then
+		fullbrightEnabled = false
+		setFullbright(false)
+	end
+	stopNoclip()
+	gui:Destroy()
+	print("[Identity Monitor] Closed.")
+end)
+
+-- Track the current music so the discussion filter knows what's playing.
+if musicEvent then
+	musicConn = musicEvent.OnClientEvent:Connect(function(...)
+		local flat = flatten(table.pack(...))
+		for _, v in ipairs(flat) do
+			if typeof(v) == "string" then
+				currentMusic = v
+				break
+			end
+		end
+		musicLbl.Text = "♪ " .. (currentMusic or "—")
+	end)
+end
+
+eventConn = Event.OnClientEvent:Connect(function(...)
+	local flat = flatten(table.pack(...))
+	local killType, killer, victim = parseFlat(flat)
+
+	-- Shots & Stabs Only: drop anything that isn't a gunshot / knife stab,
+	-- plus gunshots that carry "???" (unknown) info.
+	if killsOnlyEnabled then
+		local verb = verbFor(killType)
+		if verb ~= "Shot" and verb ~= "Stabbed" then return end
+		if verb == "Shot" and hasUnknownInfo(flat) then return end
+	end
+
+	-- Kills during discussion music are vigilante kills — flagged, not counted.
+	local ignored = discussionFilterEnabled and (currentMusic == DISCUSSION_MUSIC_NAME)
+
+	addResult(killType, killer, victim, ignored)
+end)
+
+local function hookPlayer(plr: Player)
+	plr.CharacterAdded:Connect(function()
+		if refreshDisguises then refreshDisguises() end
+		if (highlightEnabled or disguiseHlEnabled) and updateHighlights then
+			task.defer(updateHighlights)
+		end
+	end)
+	plr.CharacterRemoving:Connect(function()
+		task.defer(function()
+			if refreshDisguises then refreshDisguises() end
+		end)
+	end)
+end
+
+for _, plr in ipairs(Players:GetPlayers()) do
+	hookPlayer(plr)
+end
+
+Players.PlayerAdded:Connect(function(plr)
+	hookPlayer(plr)
+	if refreshDisguises then refreshDisguises() end
+end)
+
+Players.PlayerRemoving:Connect(function()
+	task.defer(function()
+		if refreshDisguises then refreshDisguises() end
+	end)
+end)
+
+task.spawn(function()
+	while gui.Parent do
+		if disguisePage.Visible then
+			refreshDisguises()          -- rebuilds lookup + redraws rows
+		else
+			rebuildDisguiseLookup()     -- keep Mafia targets fresh off-tab
+		end
+		if highlightEnabled or disguiseHlEnabled then
+			if updateHighlights then updateHighlights() end
+		end
+		if fullbrightEnabled then
+			applyFullbrightValues()  -- backstop in case a change slips past .Changed
+		end
+		task.wait(REFRESH_INTERVAL)
+	end
+end)
+
+refreshDisguises()
+
+print("[Identity Monitor] Active — watching "
+	.. Event:GetFullName() .. "  (Right Shift = show/hide, ✕ = exit)")
