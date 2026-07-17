@@ -6,8 +6,31 @@ local Lighting          = game:GetService("Lighting")
 local RunService        = game:GetService("RunService")
 
 local localPlayer = Players.LocalPlayer
+local HttpService = game:GetService("HttpService")
 
 local REFRESH_INTERVAL = 0.5
+
+-- Persisted user settings. Uses the executor filesystem API when present;
+-- silently no-ops (defaults only) if the executor doesn't expose it.
+local SETTINGS_FILE = "IdentityMonitorV2_settings.json"
+local SETTINGS: { [string]: any } = {}
+do
+	local ok, data = pcall(function()
+		if isfile and readfile and isfile(SETTINGS_FILE) then
+			return HttpService:JSONDecode(readfile(SETTINGS_FILE))
+		end
+		return nil
+	end)
+	if ok and typeof(data) == "table" then
+		SETTINGS = data
+	end
+end
+
+local function getSetting(key: string, default: any): any
+	local v = SETTINGS[key]
+	if v == nil then return default end
+	return v
+end
 
 -- Remotes are located in the background so the GUI always opens immediately —
 -- even in the lobby where these services don't exist yet.
@@ -111,15 +134,15 @@ end
 --==================================================================
 -- Monitor filters (all toggleable)
 --==================================================================
-local killsOnlyEnabled        = true   -- only gunshots / knife stabs reach the monitor
-local discussionFilterEnabled = true   -- kills during discussionMusic = vigilante
+local killsOnlyEnabled        = getSetting("killsOnlyEnabled", true)
+local discussionFilterEnabled = getSetting("discussionFilterEnabled", true)
 local DISCUSSION_MUSIC_NAME   = "discussionMusic"
 local currentMusic: string?   = nil
 
 --==================================================================
 -- Fullbright (Misc toggle) — re-asserts on any lighting change
 --==================================================================
-local fullbrightEnabled = false
+local fullbrightEnabled = getSetting("fullbrightEnabled", false)
 local fbSaved: { [string]: any }? = nil
 local fbApplying = false
 
@@ -174,7 +197,7 @@ end)
 --==================================================================
 -- No-clip (Misc toggle)
 --==================================================================
-local noclipEnabled = false
+local noclipEnabled = getSetting("noclipEnabled", false)
 local noclipConn: RBXScriptConnection? = nil
 local noclipOriginals: { [BasePart]: boolean } = {}
 
@@ -215,8 +238,14 @@ end
 --==================================================================
 -- Teleport timing + "look at target" camera lock
 --==================================================================
-local MAX_TP_FRAMES = 6
-local tpStabFrames  = 1
+local MAX_TP_FRAMES = 15
+local tpStabFrames  = getSetting("tpStabFrames", 5)
+local MIN_TP_CALLS  = 1
+local MAX_TP_CALLS  = 15
+local tpStabCalls   = getSetting("tpStabCalls", 3)   -- max stab/witch calls per teleport
+local MIN_TP_DIST   = 1
+local MAX_TP_DIST   = 20
+local tpDistance    = getSetting("tpDistance", 2)    -- studs behind the target
 
 local CAM_BIND = "IdentityTeleportLook"
 local camLookEye: BasePart? = nil
@@ -321,8 +350,8 @@ end
 local HL_NAME  = "IdentityHighlight"
 local TAG_NAME = "IdentityDisguiseTag"
 
-local highlightEnabled  = false
-local disguiseHlEnabled = false
+local highlightEnabled  = getSetting("highlightEnabled", false)
+local disguiseHlEnabled = getSetting("disguiseHlEnabled", false)
 local killersSeen: { [string]: number } = {}
 
 local updateHighlights: (() -> ())? = nil
@@ -410,6 +439,40 @@ local function clearAllHighlights()
 end
 
 --==================================================================
+-- Settings persistence
+--==================================================================
+local settingsReady = false  -- suppress saves during initial load
+local saveQueued = false
+
+local function saveSettings()
+	if not writefile then return end
+	local data = {
+		highlightEnabled        = highlightEnabled,
+		disguiseHlEnabled       = disguiseHlEnabled,
+		killsOnlyEnabled        = killsOnlyEnabled,
+		discussionFilterEnabled = discussionFilterEnabled,
+		fullbrightEnabled       = fullbrightEnabled,
+		noclipEnabled           = noclipEnabled,
+		tpStabFrames            = tpStabFrames,
+		tpStabCalls             = tpStabCalls,
+		tpDistance              = tpDistance,
+	}
+	pcall(function()
+		writefile(SETTINGS_FILE, HttpService:JSONEncode(data))
+	end)
+end
+
+-- Debounced save so slider drags don't hammer the disk.
+local function queueSave()
+	if not settingsReady or saveQueued then return end
+	saveQueued = true
+	task.delay(1, function()
+		saveQueued = false
+		saveSettings()
+	end)
+end
+
+--==================================================================
 -- Theme
 --==================================================================
 local C_BG        = Color3.fromRGB(18, 18, 24)
@@ -469,8 +532,8 @@ gui.Parent         = localPlayer:WaitForChild("PlayerGui")
 
 local main = Instance.new("Frame")
 main.Name             = "Window"
-main.Size             = UDim2.fromOffset(384, 470)
-main.Position         = UDim2.new(0, 20, 0.5, -235)
+main.Size             = UDim2.fromOffset(384, 506)
+main.Position         = UDim2.new(0, 20, 0.5, -253)
 main.BackgroundColor3 = C_BG
 main.BorderSizePixel  = 0
 main.Active           = true
@@ -593,6 +656,97 @@ local function styleToggle(btn: TextButton, on: boolean)
 	btn.BackgroundColor3 = on and C_TAB_ON or C_BTN
 	local s = strokeOf(btn)
 	if s then s.Color = on and C_BORDER_HL or C_BORDER end
+end
+
+-- Integer slider: label + track + knob. onChange(value) fires on every change.
+local sliderConns: { RBXScriptConnection } = {}
+local function makeSlider(parent: Instance, y: number, minV: number, maxV: number,
+	default: number, fmt: string, onChange: (number) -> ())
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Size           = UDim2.new(1, -8, 0, 14)
+	label.Position       = UDim2.new(0, 4, 0, y)
+	label.Font           = Enum.Font.Gotham
+	label.TextSize       = 11
+	label.TextColor3     = C_DIM
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextTruncate   = Enum.TextTruncate.AtEnd
+	label.Parent         = parent
+
+	local track = Instance.new("Frame")
+	track.Size             = UDim2.new(1, -8, 0, 6)
+	track.Position         = UDim2.new(0, 4, 0, y + 24)
+	track.BackgroundColor3 = C_BG
+	track.BorderSizePixel  = 0
+	track.Parent           = parent
+	uiCorner(3, track)
+	addStroke(track, C_BORDER, 1)
+
+	local fill = Instance.new("Frame")
+	fill.Size             = UDim2.new(0, 0, 1, 0)
+	fill.BackgroundColor3 = C_BORDER_HL
+	fill.BorderSizePixel  = 0
+	fill.Parent           = track
+	uiCorner(3, fill)
+
+	local knob = Instance.new("Frame")
+	knob.Size             = UDim2.new(0, 14, 0, 14)
+	knob.Position         = UDim2.new(0, -7, 0.5, -7)
+	knob.BackgroundColor3 = C_TEXT
+	knob.BorderSizePixel  = 0
+	knob.ZIndex           = 2
+	knob.Parent           = track
+	uiCorner(7, knob)
+	addStroke(knob, C_BORDER_HL, 1)
+
+	local hit = Instance.new("TextButton")
+	hit.Size                   = UDim2.new(1, -8, 0, 22)
+	hit.Position               = UDim2.new(0, 4, 0, y + 16)
+	hit.BackgroundTransparency = 1
+	hit.Text                   = ""
+	hit.AutoButtonColor        = false
+	hit.ZIndex                 = 3
+	hit.Parent                 = parent
+
+	local function apply(v: number)
+		v = math.clamp(math.floor(v + 0.5), minV, maxV)
+		local frac = (maxV > minV) and (v - minV) / (maxV - minV) or 0
+		fill.Size     = UDim2.new(frac, 0, 1, 0)
+		knob.Position = UDim2.new(frac, -7, 0.5, -7)
+		label.Text    = string.format(fmt, v)
+		onChange(v)
+	end
+
+	local dragging = false
+	local function fromX(px: number)
+		local w = track.AbsoluteSize.X
+		if w <= 0 then return end
+		local frac = math.clamp((px - track.AbsolutePosition.X) / w, 0, 1)
+		apply(minV + frac * (maxV - minV))
+	end
+
+	hit.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			fromX(input.Position.X)
+		end
+	end)
+	table.insert(sliderConns, UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch) then
+			fromX(input.Position.X)
+		end
+	end))
+	table.insert(sliderConns, UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end))
+
+	apply(default)
+	return apply  -- setter so callers can move the slider programmatically
 end
 
 --==================================================================
@@ -886,58 +1040,18 @@ local witchBtn  = makeActionButton("Remote Witch", 162, C_WITCH)
 local tpStabBtn  = makeCaptionButton("Teleport Stab",  "(Risky, use with EMP)", 214, C_STAB)
 local tpWitchBtn = makeCaptionButton("Teleport Witch", "(Risky, use with EMP)", 260, C_WITCH)
 
--- Shared teleport-timing slider (drives both Teleport Stab and Teleport Witch)
-local sliderLabel = Instance.new("TextLabel")
-sliderLabel.BackgroundTransparency = 1
-sliderLabel.Size           = UDim2.new(1, -8, 0, 14)
-sliderLabel.Position       = UDim2.new(0, 4, 0, 306)
-sliderLabel.Font           = Enum.Font.Gotham
-sliderLabel.Text           = "Teleport frames: 1  •  frames to complete (0 = instant)"
-sliderLabel.TextSize       = 11
-sliderLabel.TextColor3     = C_DIM
-sliderLabel.TextXAlignment = Enum.TextXAlignment.Left
-sliderLabel.TextTruncate   = Enum.TextTruncate.AtEnd
-sliderLabel.Parent         = mafiaPage
-
-local sliderTrack = Instance.new("Frame")
-sliderTrack.Size             = UDim2.new(1, -8, 0, 6)
-sliderTrack.Position         = UDim2.new(0, 4, 0, 330)
-sliderTrack.BackgroundColor3 = C_BG
-sliderTrack.BorderSizePixel  = 0
-sliderTrack.Parent           = mafiaPage
-uiCorner(3, sliderTrack)
-addStroke(sliderTrack, C_BORDER, 1)
-
-local sliderFill = Instance.new("Frame")
-sliderFill.Size             = UDim2.new(0, 0, 1, 0)
-sliderFill.BackgroundColor3 = C_BORDER_HL
-sliderFill.BorderSizePixel  = 0
-sliderFill.Parent           = sliderTrack
-uiCorner(3, sliderFill)
-
-local sliderKnob = Instance.new("Frame")
-sliderKnob.Size             = UDim2.new(0, 14, 0, 14)
-sliderKnob.Position         = UDim2.new(0, -7, 0.5, -7)
-sliderKnob.BackgroundColor3 = C_TEXT
-sliderKnob.BorderSizePixel  = 0
-sliderKnob.ZIndex           = 2
-sliderKnob.Parent           = sliderTrack
-uiCorner(7, sliderKnob)
-addStroke(sliderKnob, C_BORDER_HL, 1)
-
-local sliderHit = Instance.new("TextButton")
-sliderHit.Size                   = UDim2.new(1, -8, 0, 22)
-sliderHit.Position               = UDim2.new(0, 4, 0, 322)
-sliderHit.BackgroundTransparency = 1
-sliderHit.Text                   = ""
-sliderHit.AutoButtonColor        = false
-sliderHit.ZIndex                 = 3
-sliderHit.Parent                 = mafiaPage
+-- Teleport sliders (shared by Teleport Stab and Teleport Witch)
+local setFramesSlider = makeSlider(mafiaPage, 306, 0, MAX_TP_FRAMES, tpStabFrames,
+	"Teleport frames: %d  •  frames to complete (0 = instant)",
+	function(v) tpStabFrames = v; queueSave() end)
+local setCallsSlider = makeSlider(mafiaPage, 348, MIN_TP_CALLS, MAX_TP_CALLS, tpStabCalls,
+	"Max function calls: %d  •  stab/witch calls per use",
+	function(v) tpStabCalls = v; queueSave() end)
 
 local mStatus = Instance.new("TextLabel")
 mStatus.BackgroundTransparency = 1
 mStatus.Size           = UDim2.new(1, -8, 0, 20)
-mStatus.Position       = UDim2.new(0, 4, 0, 350)
+mStatus.Position       = UDim2.new(0, 4, 0, 392)
 mStatus.Font           = Enum.Font.Gotham
 mStatus.Text           = "Last action: —"
 mStatus.TextSize       = 12
@@ -972,7 +1086,7 @@ fbToggle.TextSize = 14
 local mtpHeader = Instance.new("TextLabel")
 mtpHeader.BackgroundTransparency = 1
 mtpHeader.Size           = UDim2.new(1, -8, 0, 18)
-mtpHeader.Position       = UDim2.new(0, 4, 0, 214)
+mtpHeader.Position       = UDim2.new(0, 4, 0, 88)
 mtpHeader.Font           = Enum.Font.GothamMedium
 mtpHeader.Text           = "Disguise Teleport"
 mtpHeader.TextSize       = 12
@@ -982,13 +1096,13 @@ mtpHeader.Parent         = miscPage
 
 local tpBtn = makeButton("Teleport to Disguise", miscPage)
 tpBtn.Size     = UDim2.new(1, -8, 0, 36)
-tpBtn.Position = UDim2.new(0, 4, 0, 236)
+tpBtn.Position = UDim2.new(0, 4, 0, 110)
 tpBtn.Font     = Enum.Font.GothamBold
 tpBtn.TextSize = 14
 
 local tpBox = Instance.new("TextBox")
 tpBox.Size                  = UDim2.new(1, -8, 0, 34)
-tpBox.Position              = UDim2.new(0, 4, 0, 278)
+tpBox.Position              = UDim2.new(0, 4, 0, 152)
 tpBox.BackgroundColor3      = C_PANEL
 tpBox.BorderSizePixel       = 0
 tpBox.Font                  = Enum.Font.Gotham
@@ -1012,7 +1126,7 @@ end
 local tpResolved = Instance.new("TextLabel")
 tpResolved.BackgroundTransparency = 1
 tpResolved.Size           = UDim2.new(1, -8, 0, 18)
-tpResolved.Position       = UDim2.new(0, 4, 0, 316)
+tpResolved.Position       = UDim2.new(0, 4, 0, 190)
 tpResolved.Font           = Enum.Font.Gotham
 tpResolved.Text           = "→ resolves to: —"
 tpResolved.TextSize       = 12
@@ -1024,7 +1138,7 @@ tpResolved.Parent         = miscPage
 local miscStatus = Instance.new("TextLabel")
 miscStatus.BackgroundTransparency = 1
 miscStatus.Size           = UDim2.new(1, -8, 0, 20)
-miscStatus.Position       = UDim2.new(0, 4, 0, 338)
+miscStatus.Position       = UDim2.new(0, 4, 0, 212)
 miscStatus.Font           = Enum.Font.Gotham
 miscStatus.Text           = "Last action: —"
 miscStatus.TextSize       = 12
@@ -1032,6 +1146,19 @@ miscStatus.TextColor3     = C_DIM
 miscStatus.TextXAlignment = Enum.TextXAlignment.Left
 miscStatus.TextTruncate   = Enum.TextTruncate.AtEnd
 miscStatus.Parent         = miscPage
+
+-- Teleport distance slider (used by every teleport).
+local setDistSlider = makeSlider(miscPage, 248, MIN_TP_DIST, MAX_TP_DIST, tpDistance,
+	"Teleport distance: %d  •  studs behind the target",
+	function(v) tpDistance = v; queueSave() end)
+
+-- Reset-to-defaults button, pinned to the bottom of the Misc tab.
+local resetBtn = makeButton("Reset to Default Settings", miscPage)
+resetBtn.Size             = UDim2.new(1, -8, 0, 30)
+resetBtn.Position         = UDim2.new(0, 4, 0, 292)
+resetBtn.Font             = Enum.Font.GothamBold
+resetBtn.TextSize         = 13
+resetBtn.BackgroundColor3 = C_ON_REDX
 
 --==================================================================
 -- Tab switching
@@ -1401,6 +1528,7 @@ hlToggle.MouseButton1Click:Connect(function()
 	highlightEnabled = not highlightEnabled
 	updateHlButton()
 	if updateHighlights then updateHighlights() end
+	queueSave()
 end)
 updateHlButton()
 
@@ -1411,6 +1539,7 @@ end
 shotsToggle.MouseButton1Click:Connect(function()
 	killsOnlyEnabled = not killsOnlyEnabled
 	updateShotsButton()
+	queueSave()
 end)
 updateShotsButton()
 
@@ -1421,6 +1550,7 @@ end
 discToggle.MouseButton1Click:Connect(function()
 	discussionFilterEnabled = not discussionFilterEnabled
 	updateDiscButton()
+	queueSave()
 end)
 updateDiscButton()
 
@@ -1435,6 +1565,7 @@ disgHlToggle.MouseButton1Click:Connect(function()
 	disguiseHlEnabled = not disguiseHlEnabled
 	updateDisgHlButton()
 	if updateHighlights then updateHighlights() end
+	queueSave()
 end)
 updateDisgHlButton()
 
@@ -1474,49 +1605,6 @@ stabBtn.MouseButton1Click:Connect(function()  runAction("Stab",  remoteStab)  en
 shootBtn.MouseButton1Click:Connect(function() runAction("Shoot", remoteShoot) end)
 witchBtn.MouseButton1Click:Connect(function() runAction("Witch", remoteWitch) end)
 
--- Teleport-timing slider
-local function setTpFrames(v: number)
-	v = math.clamp(math.floor(v + 0.5), 0, MAX_TP_FRAMES)
-	tpStabFrames = v
-	local frac = v / MAX_TP_FRAMES
-	sliderFill.Size     = UDim2.new(frac, 0, 1, 0)
-	sliderKnob.Position = UDim2.new(frac, -7, 0.5, -7)
-	sliderLabel.Text = string.format(
-		"Teleport frames: %d  •  frames to complete (0 = instant)", v)
-end
-
-local function sliderSetFromX(px: number)
-	local w = sliderTrack.AbsoluteSize.X
-	if w <= 0 then return end
-	local frac = math.clamp((px - sliderTrack.AbsolutePosition.X) / w, 0, 1)
-	setTpFrames(frac * MAX_TP_FRAMES)
-end
-
-local sliderDragging = false
-local sliderMoveConn: RBXScriptConnection
-local sliderEndConn: RBXScriptConnection
-
-sliderHit.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.Touch then
-		sliderDragging = true
-		sliderSetFromX(input.Position.X)
-	end
-end)
-sliderMoveConn = UserInputService.InputChanged:Connect(function(input)
-	if sliderDragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-		or input.UserInputType == Enum.UserInputType.Touch) then
-		sliderSetFromX(input.Position.X)
-	end
-end)
-sliderEndConn = UserInputService.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.Touch then
-		sliderDragging = false
-	end
-end)
-setTpFrames(tpStabFrames)
-
 -- Teleport attack: TP behind target -> look at them -> wait -> action -> TP back
 local tpAttackBusy = false
 local function teleportAttack(label: string, fn: (string) -> ())
@@ -1545,15 +1633,40 @@ local function teleportAttack(label: string, fn: (string) -> ())
 
 	tpAttackBusy = true
 	local returnCFrame = myRoot.CFrame
-	myRoot.CFrame = tRoot.CFrame * CFrame.new(0, 0, 3)  -- behind the target
 	startCameraLook(myRoot, tRoot)                      -- face them while there
-	for _ = 1, tpStabFrames do
-		RunService.Heartbeat:Wait()
+
+	-- Frames run 0..frames (frame 0 = initial placement, 1..frames each after a
+	-- Heartbeat so the position replicates). We fire at most `calls` times and
+	-- ALWAYS fire on the second-to-last frame, filling the rest of the budget
+	-- from the trailing (most-replicated) frames.
+	local frames     = tpStabFrames
+	local calls      = math.clamp(tpStabCalls, MIN_TP_CALLS, MAX_TP_CALLS)
+	local secondLast = math.max(0, frames - 1)
+	local fireOn: { [number]: boolean } = { [secondLast] = true }
+	local used = 1
+	local f = frames
+	while used < calls and f >= 0 do
+		if not fireOn[f] then
+			fireOn[f] = true
+			used += 1
+		end
+		f -= 1
 	end
-	pcall(fn, target)
+
+	for i = 0, frames do
+		if i > 0 then
+			RunService.Heartbeat:Wait()               -- let the position replicate
+		end
+		if tRoot.Parent and myRoot.Parent then
+			myRoot.CFrame = tRoot.CFrame * CFrame.new(0, 0, tpDistance)  -- stay behind them
+		end
+		if fireOn[i] then
+			pcall(fn, target)
+		end
+	end
 	stopCameraLook()
 	if myRoot and myRoot.Parent then
-		myRoot.CFrame = returnCFrame
+		myRoot.CFrame = returnCFrame                   -- back to the start
 	end
 	tpAttackBusy = false
 	mStatus.Text = string.format("%s → %s", label, target)
@@ -1573,6 +1686,7 @@ end
 noclipToggle.MouseButton1Click:Connect(function()
 	setNoclip(not noclipEnabled)
 	updateNoclipButton()
+	queueSave()
 end)
 updateNoclipButton()
 
@@ -1584,8 +1698,35 @@ fbToggle.MouseButton1Click:Connect(function()
 	fullbrightEnabled = not fullbrightEnabled
 	setFullbright(fullbrightEnabled)
 	updateFbButton()
+	queueSave()
 end)
 updateFbButton()
+
+local function resetSettings()
+	highlightEnabled        = false
+	disguiseHlEnabled       = false
+	killsOnlyEnabled        = true
+	discussionFilterEnabled = true
+	if fullbrightEnabled then setFullbright(false) end
+	fullbrightEnabled       = false
+	if noclipEnabled then setNoclip(false) end
+	-- refresh every toggle's visual
+	updateHlButton()
+	updateShotsButton()
+	updateDiscButton()
+	updateDisgHlButton()
+	updateFbButton()
+	updateNoclipButton()
+	-- sliders (setter also writes the state var back)
+	setFramesSlider(5)
+	setCallsSlider(3)
+	setDistSlider(2)
+	if updateHighlights then updateHighlights() end
+	queueSave()
+	miscStatus.Text = "Settings reset to defaults"
+	miscStatus.TextColor3 = C_VIGIL
+end
+resetBtn.MouseButton1Click:Connect(resetSettings)
 
 local function updateTpResolved()
 	local target = resolveTarget(tpBox.Text)
@@ -1621,7 +1762,7 @@ tpBtn.MouseButton1Click:Connect(function()
 		miscStatus.TextColor3 = C_KILLER
 		return
 	end
-	myRoot.CFrame = tRoot.CFrame * CFrame.new(0, 0, 3)  -- behind the target
+	myRoot.CFrame = tRoot.CFrame * CFrame.new(0, 0, tpDistance)  -- behind the target
 	startCameraLook(myRoot, tRoot)                      -- face them, release on input
 	releaseCameraLookOnInput()
 	miscStatus.Text = "Teleported behind " .. target
@@ -1650,9 +1791,9 @@ exitBtn.MouseButton1Click:Connect(function()
 	if musicConn then musicConn:Disconnect() end
 	if rightShiftConn then rightShiftConn:Disconnect() end
 	if dragMoveConn then dragMoveConn:Disconnect() end
-	if sliderMoveConn then sliderMoveConn:Disconnect() end
-	if sliderEndConn then sliderEndConn:Disconnect() end
+	for _, c in ipairs(sliderConns) do c:Disconnect() end
 	if fbChangedConn then fbChangedConn:Disconnect() end
+	saveSettings()  -- persist current preferences before tearing down
 	stopCameraLook()
 	clearAllHighlights()
 	if fullbrightEnabled then
@@ -1711,6 +1852,14 @@ task.spawn(function()
 end)
 
 refreshDisguises()
+
+-- Apply the side-effects of any restored settings, then allow saving.
+if fullbrightEnabled then setFullbright(true) end
+if noclipEnabled then startNoclip() end
+if highlightEnabled or disguiseHlEnabled then
+	if updateHighlights then updateHighlights() end
+end
+settingsReady = true
 
 -- Find the effect + music remotes in the background so the GUI never blocks.
 task.spawn(function()
