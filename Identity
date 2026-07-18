@@ -245,7 +245,19 @@ local MAX_TP_CALLS  = 15
 local tpStabCalls   = getSetting("tpStabCalls", 3)   -- max stab/witch calls per teleport
 local MIN_TP_DIST   = 1
 local MAX_TP_DIST   = 20
-local tpDistance    = getSetting("tpDistance", 2)    -- studs behind the target
+local tpDistance    = getSetting("tpDistance", 2)    -- studs behind (or under) target
+local undergroundEnabled = getSetting("undergroundEnabled", false)  -- stab/witch drop below
+
+-- Toggle keybinds (recorded from the Misc tab). Stored as KeyCode names.
+local function resolveKey(name: any): EnumItem?
+	if type(name) ~= "string" then return nil end
+	local ok, k = pcall(function() return (Enum.KeyCode :: any)[name] end)
+	if ok and typeof(k) == "EnumItem" then return k end
+	return nil
+end
+local noclipKey: EnumItem? = resolveKey(getSetting("noclipKey", nil))
+local fbKey: EnumItem?     = resolveKey(getSetting("fbKey", nil))
+local listeningFor: string? = nil   -- "noclip" | "fullbright" while recording
 
 local CAM_BIND = "IdentityTeleportLook"
 local camLookEye: BasePart? = nil
@@ -456,6 +468,9 @@ local function saveSettings()
 		tpStabFrames            = tpStabFrames,
 		tpStabCalls             = tpStabCalls,
 		tpDistance              = tpDistance,
+		undergroundEnabled      = undergroundEnabled,
+		noclipKey               = noclipKey and noclipKey.Name or nil,
+		fbKey                   = fbKey and fbKey.Name or nil,
 	}
 	pcall(function()
 		writefile(SETTINGS_FILE, HttpService:JSONEncode(data))
@@ -1070,15 +1085,25 @@ miscPage.Size                   = UDim2.new(1, 0, 1, 0)
 miscPage.Visible                = false
 miscPage.Parent                 = content
 
+local noclipBindBtn = makeButton("Bind", miscPage)
+noclipBindBtn.Size     = UDim2.new(0, 46, 0, 34)
+noclipBindBtn.Position = UDim2.new(0, 4, 0, 4)
+noclipBindBtn.TextSize = 12
+
 local noclipToggle = makeButton("No Clip: OFF", miscPage)
-noclipToggle.Size     = UDim2.new(1, -8, 0, 34)
-noclipToggle.Position = UDim2.new(0, 4, 0, 4)
+noclipToggle.Size     = UDim2.new(1, -58, 0, 34)
+noclipToggle.Position = UDim2.new(0, 54, 0, 4)
 noclipToggle.Font     = Enum.Font.GothamBold
 noclipToggle.TextSize = 14
 
+local fbBindBtn = makeButton("Bind", miscPage)
+fbBindBtn.Size     = UDim2.new(0, 46, 0, 34)
+fbBindBtn.Position = UDim2.new(0, 4, 0, 44)
+fbBindBtn.TextSize = 12
+
 local fbToggle = makeButton("Fullbright: OFF", miscPage)
-fbToggle.Size     = UDim2.new(1, -8, 0, 34)
-fbToggle.Position = UDim2.new(0, 4, 0, 44)
+fbToggle.Size     = UDim2.new(1, -58, 0, 34)
+fbToggle.Position = UDim2.new(0, 54, 0, 44)
 fbToggle.Font     = Enum.Font.GothamBold
 fbToggle.TextSize = 14
 
@@ -1147,15 +1172,22 @@ miscStatus.TextXAlignment = Enum.TextXAlignment.Left
 miscStatus.TextTruncate   = Enum.TextTruncate.AtEnd
 miscStatus.Parent         = miscPage
 
--- Teleport distance slider (used by every teleport).
-local setDistSlider = makeSlider(miscPage, 248, MIN_TP_DIST, MAX_TP_DIST, tpDistance,
-	"Teleport distance: %d  •  studs behind the target",
+-- Underground teleport toggle (Teleport Stab / Teleport Witch drop below target).
+local undergroundToggle = makeButton("Underground Teleport: OFF", miscPage)
+undergroundToggle.Size     = UDim2.new(1, -8, 0, 30)
+undergroundToggle.Position = UDim2.new(0, 4, 0, 240)
+undergroundToggle.Font     = Enum.Font.GothamBold
+undergroundToggle.TextSize = 13
+
+-- Teleport distance slider (studs behind the target, or under when underground).
+local setDistSlider = makeSlider(miscPage, 278, MIN_TP_DIST, MAX_TP_DIST, tpDistance,
+	"Teleport distance: %d  •  studs behind / under target",
 	function(v) tpDistance = v; queueSave() end)
 
 -- Reset-to-defaults button, pinned to the bottom of the Misc tab.
 local resetBtn = makeButton("Reset to Default Settings", miscPage)
 resetBtn.Size             = UDim2.new(1, -8, 0, 30)
-resetBtn.Position         = UDim2.new(0, 4, 0, 292)
+resetBtn.Position         = UDim2.new(0, 4, 0, 318)
 resetBtn.Font             = Enum.Font.GothamBold
 resetBtn.TextSize         = 13
 resetBtn.BackgroundColor3 = C_ON_REDX
@@ -1658,7 +1690,11 @@ local function teleportAttack(label: string, fn: (string) -> ())
 			RunService.Heartbeat:Wait()               -- let the position replicate
 		end
 		if tRoot.Parent and myRoot.Parent then
-			myRoot.CFrame = tRoot.CFrame * CFrame.new(0, 0, tpDistance)  -- stay behind them
+			if undergroundEnabled then
+				myRoot.CFrame = tRoot.CFrame * CFrame.new(0, -tpDistance, 0)  -- under, below ground
+			else
+				myRoot.CFrame = tRoot.CFrame * CFrame.new(0, 0, tpDistance)   -- behind them
+			end
 		end
 		if fireOn[i] then
 			pcall(fn, target)
@@ -1702,11 +1738,81 @@ fbToggle.MouseButton1Click:Connect(function()
 end)
 updateFbButton()
 
+local function updateUndergroundButton()
+	undergroundToggle.Text = "Underground Teleport: " .. (undergroundEnabled and "ON" or "OFF")
+	styleToggle(undergroundToggle, undergroundEnabled)
+end
+undergroundToggle.MouseButton1Click:Connect(function()
+	undergroundEnabled = not undergroundEnabled
+	updateUndergroundButton()
+	queueSave()
+end)
+updateUndergroundButton()
+
+-- Keybind recorders: click to record the next key as that toggle's hotkey.
+local function updateBindButtons()
+	noclipBindBtn.Text = (listeningFor == "noclip") and "..."
+		or (noclipKey and noclipKey.Name or "Bind")
+	fbBindBtn.Text = (listeningFor == "fullbright") and "..."
+		or (fbKey and fbKey.Name or "Bind")
+	styleToggle(noclipBindBtn, listeningFor == "noclip")
+	styleToggle(fbBindBtn, listeningFor == "fullbright")
+end
+noclipBindBtn.MouseButton1Click:Connect(function()
+	listeningFor = (listeningFor == "noclip") and nil or "noclip"
+	updateBindButtons()
+end)
+fbBindBtn.MouseButton1Click:Connect(function()
+	listeningFor = (listeningFor == "fullbright") and nil or "fullbright"
+	updateBindButtons()
+end)
+updateBindButtons()
+
+local keybindConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+	local key = input.KeyCode
+	if key == Enum.KeyCode.Unknown then return end
+
+	if listeningFor then
+		-- Escape cancels; otherwise record. Clear the key off the other action
+		-- so one key never toggles both.
+		if key ~= Enum.KeyCode.Escape then
+			if listeningFor == "noclip" then
+				if fbKey == key then fbKey = nil end
+				noclipKey = key
+			else
+				if noclipKey == key then noclipKey = nil end
+				fbKey = key
+			end
+		end
+		listeningFor = nil
+		updateBindButtons()
+		queueSave()
+		return
+	end
+
+	if gameProcessed then return end  -- ignore while typing in a text box
+	if noclipKey and key == noclipKey then
+		setNoclip(not noclipEnabled)
+		updateNoclipButton()
+		queueSave()
+	elseif fbKey and key == fbKey then
+		fullbrightEnabled = not fullbrightEnabled
+		setFullbright(fullbrightEnabled)
+		updateFbButton()
+		queueSave()
+	end
+end)
+
 local function resetSettings()
 	highlightEnabled        = false
 	disguiseHlEnabled       = false
 	killsOnlyEnabled        = true
 	discussionFilterEnabled = true
+	undergroundEnabled      = false
+	noclipKey               = nil
+	fbKey                   = nil
+	listeningFor            = nil
 	if fullbrightEnabled then setFullbright(false) end
 	fullbrightEnabled       = false
 	if noclipEnabled then setNoclip(false) end
@@ -1717,6 +1823,8 @@ local function resetSettings()
 	updateDisgHlButton()
 	updateFbButton()
 	updateNoclipButton()
+	updateUndergroundButton()
+	updateBindButtons()
 	-- sliders (setter also writes the state var back)
 	setFramesSlider(5)
 	setCallsSlider(3)
@@ -1790,6 +1898,7 @@ exitBtn.MouseButton1Click:Connect(function()
 	if eventConn then eventConn:Disconnect() end
 	if musicConn then musicConn:Disconnect() end
 	if rightShiftConn then rightShiftConn:Disconnect() end
+	if keybindConn then keybindConn:Disconnect() end
 	if dragMoveConn then dragMoveConn:Disconnect() end
 	for _, c in ipairs(sliderConns) do c:Disconnect() end
 	if fbChangedConn then fbChangedConn:Disconnect() end
