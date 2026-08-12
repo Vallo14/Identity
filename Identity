@@ -25,7 +25,6 @@ do
 		SETTINGS = data
 	end
 end
-
 local function getSetting(key: string, default: any): any
 	local v = SETTINGS[key]
 	if v == nil then return default end
@@ -240,12 +239,15 @@ end
 --==================================================================
 local MAX_TP_FRAMES = 15
 local tpStabFrames  = getSetting("tpStabFrames", 5)
+
 local MIN_TP_CALLS  = 1
 local MAX_TP_CALLS  = 15
 local tpStabCalls   = getSetting("tpStabCalls", 3)   -- max stab/witch calls per teleport
+
 local MIN_TP_DIST   = 1
 local MAX_TP_DIST   = 20
 local tpDistance    = getSetting("tpDistance", 2)    -- studs behind (or under) target
+
 local undergroundEnabled = getSetting("undergroundEnabled", false)  -- stab/witch drop below
 
 -- Toggle keybinds (recorded from the Misc tab). Stored as KeyCode names.
@@ -255,6 +257,7 @@ local function resolveKey(name: any): EnumItem?
 	if ok and typeof(k) == "EnumItem" then return k end
 	return nil
 end
+
 local noclipKey: EnumItem? = resolveKey(getSetting("noclipKey", nil))
 local fbKey: EnumItem?     = resolveKey(getSetting("fbKey", nil))
 local listeningFor: string? = nil   -- "noclip" | "fullbright" while recording
@@ -339,6 +342,7 @@ local function remoteStab(targetUsername: string)
 		}
 	)
 end
+
 local function remoteShoot(targetUsername: string)
 	local Event = game:GetService("ReplicatedStorage").RoleNetworks.mafia.onShoot
 	Event:InvokeServer(
@@ -347,11 +351,33 @@ local function remoteShoot(targetUsername: string)
 		}
 	)
 end
+
 local function remoteWitch(targetUsername: string)
 	local Event = game:GetService("ReplicatedStorage").RoleNetworks.witch.onSilence
 	Event:InvokeServer(
 		{
 			game:GetService("Players")[targetUsername]
+		}
+	)
+end
+
+-- >>> NEAREST-TARGET ACTIONS — FILL IN YOUR OWN REMOTE LOGIC <<<
+-- `nearestPlayer` is the true Roblox username (never a display name or a
+-- disguise name) of the closest disguised, non-killer player to you.
+local function nearestStab(nearestPlayer: string)
+	local Event = game:GetService("ReplicatedStorage").RoleNetworks.mafia.onStab
+	Event:InvokeServer(
+		{
+			game:GetService("Players")[nearestPlayer]
+		}
+	)
+end
+
+local function nearestWitch(nearestPlayer: string)
+	local Event = game:GetService("ReplicatedStorage").RoleNetworks.witch.onSilence
+	Event:InvokeServer(
+		{
+			game:GetService("Players")[nearestPlayer]
 		}
 	)
 end
@@ -364,8 +390,8 @@ local TAG_NAME = "IdentityDisguiseTag"
 
 local highlightEnabled  = getSetting("highlightEnabled", false)
 local disguiseHlEnabled = getSetting("disguiseHlEnabled", false)
-local killersSeen: { [string]: number } = {}
 
+local killersSeen: { [string]: number } = {}
 local updateHighlights: (() -> ())? = nil
 
 local function isDisguised(plr: Player): (boolean, Instance?, string?)
@@ -502,7 +528,6 @@ local C_DISGUISE  = Color3.fromRGB(120, 200, 255)
 local C_KILLER    = Color3.fromRGB(255, 90, 100)
 local C_NEUTRAL   = Color3.fromRGB(66, 74, 98)
 local C_VIGIL     = Color3.fromRGB(120, 195, 150)
-
 local C_BORDER    = Color3.fromRGB(38, 62, 116)
 local C_BORDER_HL = Color3.fromRGB(72, 122, 205)
 
@@ -547,8 +572,8 @@ gui.Parent         = localPlayer:WaitForChild("PlayerGui")
 
 local main = Instance.new("Frame")
 main.Name             = "Window"
-main.Size             = UDim2.fromOffset(384, 506)
-main.Position         = UDim2.new(0, 20, 0.5, -253)
+main.Size             = UDim2.fromOffset(384, 586)
+main.Position         = UDim2.new(0, 20, 0.5, -293)
 main.BackgroundColor3 = C_BG
 main.BorderSizePixel  = 0
 main.Active           = true
@@ -675,6 +700,7 @@ end
 
 -- Integer slider: label + track + knob. onChange(value) fires on every change.
 local sliderConns: { RBXScriptConnection } = {}
+
 local function makeSlider(parent: Instance, y: number, minV: number, maxV: number,
 	default: number, fmt: string, onChange: (number) -> ())
 	local label = Instance.new("TextLabel")
@@ -747,12 +773,14 @@ local function makeSlider(parent: Instance, y: number, minV: number, maxV: numbe
 			fromX(input.Position.X)
 		end
 	end)
+
 	table.insert(sliderConns, UserInputService.InputChanged:Connect(function(input)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
 			or input.UserInputType == Enum.UserInputType.Touch) then
 			fromX(input.Position.X)
 		end
 	end))
+
 	table.insert(sliderConns, UserInputService.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1
 			or input.UserInputType == Enum.UserInputType.Touch then
@@ -840,12 +868,14 @@ eList.CanvasSize             = UDim2.new(0, 0, 0, 0)
 eList.AutomaticCanvasSize    = Enum.AutomaticSize.Y
 eList.ScrollingDirection     = Enum.ScrollingDirection.Y
 eList.Parent                 = effectsPage
+
 do
 	local l = Instance.new("UIListLayout")
 	l.Padding             = UDim.new(0, 6)
 	l.SortOrder           = Enum.SortOrder.LayoutOrder
 	l.HorizontalAlignment = Enum.HorizontalAlignment.Center
 	l.Parent              = eList
+
 	local p = Instance.new("UIPadding")
 	p.PaddingTop    = UDim.new(0, 4)
 	p.PaddingBottom = UDim.new(0, 4)
@@ -910,12 +940,14 @@ dList.CanvasSize             = UDim2.new(0, 0, 0, 0)
 dList.AutomaticCanvasSize    = Enum.AutomaticSize.Y
 dList.ScrollingDirection     = Enum.ScrollingDirection.Y
 dList.Parent                 = disguisePage
+
 do
 	local l = Instance.new("UIListLayout")
 	l.Padding             = UDim.new(0, 4)
 	l.SortOrder           = Enum.SortOrder.LayoutOrder
 	l.HorizontalAlignment = Enum.HorizontalAlignment.Center
 	l.Parent              = dList
+
 	local p = Instance.new("UIPadding")
 	p.PaddingTop    = UDim.new(0, 2)
 	p.PaddingBottom = UDim.new(0, 4)
@@ -1001,11 +1033,13 @@ local function makeActionButton(text: string, y: number, accent: Color3): TextBu
 	stripe.BorderSizePixel  = 0
 	stripe.Parent           = b
 	uiCorner(2, stripe)
+
 	return b
 end
 
--- Two-line button with a small caption (used for the "risky" actions).
-local function makeCaptionButton(mainText: string, capText: string, y: number, accent: Color3): TextButton
+-- Two-line button with a small caption (used for the "risky" actions and for
+-- the nearest-target buttons, whose caption shows the live target).
+local function makeCaptionButton(mainText: string, capText: string, y: number, accent: Color3): (TextButton, TextLabel)
 	local b = Instance.new("TextButton")
 	b.Size             = UDim2.new(1, -8, 0, 42)
 	b.Position         = UDim2.new(0, 4, 0, y)
@@ -1025,16 +1059,16 @@ local function makeCaptionButton(mainText: string, capText: string, y: number, a
 	stripe.Parent           = b
 	uiCorner(2, stripe)
 
-	local main = Instance.new("TextLabel")
-	main.BackgroundTransparency = 1
-	main.Size           = UDim2.new(1, -16, 0, 18)
-	main.Position       = UDim2.new(0, 8, 0, 5)
-	main.Font           = Enum.Font.GothamBold
-	main.Text           = mainText
-	main.TextSize       = 14
-	main.TextColor3     = C_TEXT
-	main.TextXAlignment = Enum.TextXAlignment.Center
-	main.Parent         = b
+	local mainLbl = Instance.new("TextLabel")
+	mainLbl.BackgroundTransparency = 1
+	mainLbl.Size           = UDim2.new(1, -16, 0, 18)
+	mainLbl.Position       = UDim2.new(0, 8, 0, 5)
+	mainLbl.Font           = Enum.Font.GothamBold
+	mainLbl.Text           = mainText
+	mainLbl.TextSize       = 14
+	mainLbl.TextColor3     = C_TEXT
+	mainLbl.TextXAlignment = Enum.TextXAlignment.Center
+	mainLbl.Parent         = b
 
 	local cap = Instance.new("TextLabel")
 	cap.BackgroundTransparency = 1
@@ -1045,28 +1079,37 @@ local function makeCaptionButton(mainText: string, capText: string, y: number, a
 	cap.TextSize       = 11
 	cap.TextColor3     = accent
 	cap.TextXAlignment = Enum.TextXAlignment.Center
+	cap.TextTruncate   = Enum.TextTruncate.AtEnd
 	cap.Parent         = b
-	return b
+
+	return b, cap
 end
 
 local stabBtn   = makeActionButton("Remote Stab", 76, C_STAB)
 local shootBtn  = makeCaptionButton("Remote Shoot", "(Risky, use with EMP)", 116, C_SHOOT)
 local witchBtn  = makeActionButton("Remote Witch", 162, C_WITCH)
-local tpStabBtn  = makeCaptionButton("Teleport Stab",  "(Risky, use with EMP)", 214, C_STAB)
-local tpWitchBtn = makeCaptionButton("Teleport Witch", "(Risky, use with EMP)", 260, C_WITCH)
+
+-- Nearest-target actions: ignore the text box entirely and use the closest
+-- disguised, non-killer player. The caption shows who that currently is.
+local nearestStabBtn,  nearestStabCap  = makeCaptionButton("Nearest Stab",  "nearest: —", 202, C_STAB)
+local nearestWitchBtn, nearestWitchCap = makeCaptionButton("Nearest Witch", "nearest: —", 248, C_WITCH)
+
+local tpStabBtn  = makeCaptionButton("Teleport Stab",  "(Risky, use with EMP)", 300, C_STAB)
+local tpWitchBtn = makeCaptionButton("Teleport Witch", "(Risky, use with EMP)", 346, C_WITCH)
 
 -- Teleport sliders (shared by Teleport Stab and Teleport Witch)
-local setFramesSlider = makeSlider(mafiaPage, 306, 0, MAX_TP_FRAMES, tpStabFrames,
+local setFramesSlider = makeSlider(mafiaPage, 392, 0, MAX_TP_FRAMES, tpStabFrames,
 	"Teleport frames: %d  •  frames to complete (0 = instant)",
 	function(v) tpStabFrames = v; queueSave() end)
-local setCallsSlider = makeSlider(mafiaPage, 348, MIN_TP_CALLS, MAX_TP_CALLS, tpStabCalls,
+
+local setCallsSlider = makeSlider(mafiaPage, 434, MIN_TP_CALLS, MAX_TP_CALLS, tpStabCalls,
 	"Max function calls: %d  •  stab/witch calls per use",
 	function(v) tpStabCalls = v; queueSave() end)
 
 local mStatus = Instance.new("TextLabel")
 mStatus.BackgroundTransparency = 1
 mStatus.Size           = UDim2.new(1, -8, 0, 20)
-mStatus.Position       = UDim2.new(0, 4, 0, 392)
+mStatus.Position       = UDim2.new(0, 4, 0, 478)
 mStatus.Font           = Enum.Font.Gotham
 mStatus.Text           = "Last action: —"
 mStatus.TextSize       = 12
@@ -1202,16 +1245,21 @@ local function styleTab(tab: TextButton, active: boolean)
 	if s then s.Color = active and C_BORDER_HL or C_BORDER end
 end
 
+local updateNearestCaptions: (() -> ())? = nil
+
 local function setActiveTab(which: string)
 	effectsPage.Visible  = (which == "effects")
 	disguisePage.Visible = (which == "disguises")
 	mafiaPage.Visible    = (which == "mafia")
 	miscPage.Visible     = (which == "misc")
+
 	styleTab(tabEffects,   which == "effects")
 	styleTab(tabDisguises, which == "disguises")
 	styleTab(tabMafia,     which == "mafia")
 	styleTab(tabMisc,      which == "misc")
+
 	if which == "disguises" and refreshDisguises then refreshDisguises() end
+	if which == "mafia" and updateNearestCaptions then updateNearestCaptions() end
 end
 
 tabEffects.MouseButton1Click:Connect(function() setActiveTab("effects") end)
@@ -1227,6 +1275,7 @@ local dragMoveConn: RBXScriptConnection
 do
 	local dragging = false
 	local dragStart: Vector3, startPos: UDim2
+
 	bar.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1
 			or input.UserInputType == Enum.UserInputType.Touch then
@@ -1240,6 +1289,7 @@ do
 			end)
 		end
 	end)
+
 	dragMoveConn = UserInputService.InputChanged:Connect(function(input)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
 			or input.UserInputType == Enum.UserInputType.Touch) then
@@ -1305,6 +1355,7 @@ local function addResult(killType: any, killer: any, victim: any, ignored: boole
 			killersSeen[killerName] = (killersSeen[killerName] or 0) + 1
 			if updateHighlights then updateHighlights() end
 			if refreshDisguises then refreshDisguises() end
+			if updateNearestCaptions then updateNearestCaptions() end
 		end
 	end
 
@@ -1381,6 +1432,7 @@ local function addResult(killType: any, killer: any, victim: any, ignored: boole
 			recordedKiller = nil
 			if updateHighlights then updateHighlights() end
 			if refreshDisguises then refreshDisguises() end
+			if updateNearestCaptions then updateNearestCaptions() end
 		end
 		if not ignored and resultCount > 0 then
 			resultCount -= 1
@@ -1538,6 +1590,67 @@ refreshDisguises = function()
 end
 
 --==================================================================
+-- Nearest valid target
+--
+-- "Valid" = another player who (a) has a character with a root part,
+-- (b) is alive, (c) is disguised (character name ~= their username), and
+-- (d) is NOT flagged as a killer in the Effects tab. No range limit —
+-- the closest valid player anywhere on the map wins.
+--
+-- Returns: username, distance in studs, disguise name  (or nil if none).
+--==================================================================
+local function findNearestTarget(): (string?, number?, string?)
+	local myChar = localPlayer.Character
+	local myRoot = myChar and (myChar:FindFirstChild("HumanoidRootPart") or myChar.PrimaryPart)
+	if not myRoot then return nil, nil, nil end
+	local myPos = (myRoot :: BasePart).Position
+
+	local bestName: string? = nil
+	local bestDist: number? = nil
+	local bestDisguise: string? = nil
+
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= localPlayer then
+			local char = plr.Character
+			local root = char and (char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart)
+			if root and char then
+				local hum = char:FindFirstChildOfClass("Humanoid")
+				local alive = (hum == nil) or (hum.Health > 0)
+				local disguised = (char.Name ~= plr.Name)
+				if alive and disguised and not isKnownKiller(plr, char.Name) then
+					local d = ((root :: BasePart).Position - myPos).Magnitude
+					if bestDist == nil or d < bestDist then
+						bestName     = plr.Name        -- true username, never display/disguise name
+						bestDist     = d
+						bestDisguise = char.Name
+					end
+				end
+			end
+		end
+	end
+
+	return bestName, bestDist, bestDisguise
+end
+
+-- Live caption under the two nearest buttons.
+updateNearestCaptions = function()
+	local name, dist, disguise = findNearestTarget()
+	local text: string
+	local color: Color3
+	if name then
+		text  = string.format("%s  (%s)  •  %d studs", name, disguise or "?", math.floor((dist or 0) + 0.5))
+		color = C_DISGUISE
+	else
+		text  = "nearest: none found"
+		color = C_DIM
+	end
+	nearestStabCap.Text        = text
+	nearestStabCap.TextColor3  = color
+	nearestWitchCap.Text       = text
+	nearestWitchCap.TextColor3 = color
+end
+
+--==================================================================
 -- Wiring: Effects settings
 --==================================================================
 clearBtn.MouseButton1Click:Connect(function()
@@ -1550,6 +1663,7 @@ clearBtn.MouseButton1Click:Connect(function()
 	table.clear(killersSeen)
 	if updateHighlights then updateHighlights() end
 	if refreshDisguises then refreshDisguises() end
+	if updateNearestCaptions then updateNearestCaptions() end
 end)
 
 local function updateHlButton()
@@ -1637,22 +1751,52 @@ stabBtn.MouseButton1Click:Connect(function()  runAction("Stab",  remoteStab)  en
 shootBtn.MouseButton1Click:Connect(function() runAction("Shoot", remoteShoot) end)
 witchBtn.MouseButton1Click:Connect(function() runAction("Witch", remoteWitch) end)
 
+-- Nearest actions: ignore the text box, find the closest disguised non-killer,
+-- and hand its USERNAME to your stub as `nearestPlayer`.
+local function runNearestAction(label: string, fn: (string) -> ())
+	local nearestPlayer, dist, disguise = findNearestTarget()
+	updateNearestCaptions()
+
+	if not nearestPlayer then
+		mStatus.Text = label .. ": no disguised non-killer nearby"
+		mStatus.TextColor3 = C_KILLER
+		return
+	end
+
+	local ok, err = pcall(fn, nearestPlayer)
+	if ok then
+		mStatus.Text = string.format("Last action: %s → %s (%s, %d studs)",
+			label, nearestPlayer, disguise or "?", math.floor((dist or 0) + 0.5))
+		mStatus.TextColor3 = C_VIGIL
+	else
+		mStatus.Text = string.format("%s errored: %s", label, tostring(err))
+		mStatus.TextColor3 = C_KILLER
+	end
+end
+
+nearestStabBtn.MouseButton1Click:Connect(function()  runNearestAction("Nearest Stab",  nearestStab)  end)
+nearestWitchBtn.MouseButton1Click:Connect(function() runNearestAction("Nearest Witch", nearestWitch) end)
+
 -- Teleport attack: TP behind target -> look at them -> wait -> action -> TP back
 local tpAttackBusy = false
+
 local function teleportAttack(label: string, fn: (string) -> ())
 	if tpAttackBusy then return end
+
 	local target = resolveTarget(targetBox.Text)
 	if not target then
 		mStatus.Text = label .. ": no target entered"
 		mStatus.TextColor3 = C_KILLER
 		return
 	end
+
 	local targetPlayer = Players:FindFirstChild(target)
 	if not targetPlayer then
 		mStatus.Text = label .. ": player not found (" .. target .. ")"
 		mStatus.TextColor3 = C_KILLER
 		return
 	end
+
 	local tChar = targetPlayer.Character
 	local myChar = localPlayer.Character
 	local tRoot = tChar and (tChar:FindFirstChild("HumanoidRootPart") or tChar.PrimaryPart)
@@ -1674,6 +1818,7 @@ local function teleportAttack(label: string, fn: (string) -> ())
 	local frames     = tpStabFrames
 	local calls      = math.clamp(tpStabCalls, MIN_TP_CALLS, MAX_TP_CALLS)
 	local secondLast = math.max(0, frames - 1)
+
 	local fireOn: { [number]: boolean } = { [secondLast] = true }
 	local used = 1
 	local f = frames
@@ -1700,10 +1845,12 @@ local function teleportAttack(label: string, fn: (string) -> ())
 			pcall(fn, target)
 		end
 	end
+
 	stopCameraLook()
 	if myRoot and myRoot.Parent then
 		myRoot.CFrame = returnCFrame                   -- back to the start
 	end
+
 	tpAttackBusy = false
 	mStatus.Text = string.format("%s → %s", label, target)
 	mStatus.TextColor3 = C_VIGIL
@@ -1758,6 +1905,7 @@ local function updateBindButtons()
 	styleToggle(noclipBindBtn, listeningFor == "noclip")
 	styleToggle(fbBindBtn, listeningFor == "fullbright")
 end
+
 noclipBindBtn.MouseButton1Click:Connect(function()
 	listeningFor = (listeningFor == "noclip") and nil or "noclip"
 	updateBindButtons()
@@ -1792,6 +1940,7 @@ local keybindConn = UserInputService.InputBegan:Connect(function(input, gameProc
 	end
 
 	if gameProcessed then return end  -- ignore while typing in a text box
+
 	if noclipKey and key == noclipKey then
 		setNoclip(not noclipEnabled)
 		updateNoclipButton()
@@ -1813,9 +1962,11 @@ local function resetSettings()
 	noclipKey               = nil
 	fbKey                   = nil
 	listeningFor            = nil
+
 	if fullbrightEnabled then setFullbright(false) end
 	fullbrightEnabled       = false
 	if noclipEnabled then setNoclip(false) end
+
 	-- refresh every toggle's visual
 	updateHlButton()
 	updateShotsButton()
@@ -1825,12 +1976,15 @@ local function resetSettings()
 	updateNoclipButton()
 	updateUndergroundButton()
 	updateBindButtons()
+
 	-- sliders (setter also writes the state var back)
 	setFramesSlider(5)
 	setCallsSlider(3)
 	setDistSlider(2)
+
 	if updateHighlights then updateHighlights() end
 	queueSave()
+
 	miscStatus.Text = "Settings reset to defaults"
 	miscStatus.TextColor3 = C_VIGIL
 end
@@ -1855,12 +2009,14 @@ tpBtn.MouseButton1Click:Connect(function()
 		miscStatus.TextColor3 = C_KILLER
 		return
 	end
+
 	local targetPlayer = Players:FindFirstChild(target)
 	if not targetPlayer then
 		miscStatus.Text = "Teleport: player not found (" .. target .. ")"
 		miscStatus.TextColor3 = C_KILLER
 		return
 	end
+
 	local tChar = targetPlayer.Character
 	local myChar = localPlayer.Character
 	local tRoot = tChar and (tChar:FindFirstChild("HumanoidRootPart") or tChar.PrimaryPart)
@@ -1870,9 +2026,11 @@ tpBtn.MouseButton1Click:Connect(function()
 		miscStatus.TextColor3 = C_KILLER
 		return
 	end
+
 	myRoot.CFrame = tRoot.CFrame * CFrame.new(0, 0, tpDistance)  -- behind the target
 	startCameraLook(myRoot, tRoot)                      -- face them, release on input
 	releaseCameraLookOnInput()
+
 	miscStatus.Text = "Teleported behind " .. target
 	miscStatus.TextColor3 = C_VIGIL
 end)
@@ -1950,6 +2108,9 @@ task.spawn(function()
 		else
 			rebuildDisguiseLookup()
 		end
+		if mafiaPage.Visible and updateNearestCaptions then
+			updateNearestCaptions()
+		end
 		if highlightEnabled or disguiseHlEnabled then
 			if updateHighlights then updateHighlights() end
 		end
@@ -1961,6 +2122,7 @@ task.spawn(function()
 end)
 
 refreshDisguises()
+updateNearestCaptions()
 
 -- Apply the side-effects of any restored settings, then allow saving.
 if fullbrightEnabled then setFullbright(true) end
