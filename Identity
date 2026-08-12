@@ -516,26 +516,28 @@ end
 --==================================================================
 -- Theme
 --==================================================================
-local C_BG        = Color3.fromRGB(18, 18, 24)
-local C_PANEL     = Color3.fromRGB(23, 24, 33)
-local C_CARD      = Color3.fromRGB(25, 26, 36)
-local C_BTN       = Color3.fromRGB(29, 32, 46)
-local C_TAB_ON    = Color3.fromRGB(30, 40, 64)
-local C_TAB_OFF   = Color3.fromRGB(21, 22, 30)
-local C_TEXT      = Color3.fromRGB(235, 238, 248)
-local C_DIM       = Color3.fromRGB(140, 148, 168)
-local C_DISGUISE  = Color3.fromRGB(120, 200, 255)
-local C_KILLER    = Color3.fromRGB(255, 90, 100)
-local C_NEUTRAL   = Color3.fromRGB(66, 74, 98)
-local C_VIGIL     = Color3.fromRGB(120, 195, 150)
-local C_BORDER    = Color3.fromRGB(38, 62, 116)
-local C_BORDER_HL = Color3.fromRGB(72, 122, 205)
-
-local C_STAB  = Color3.fromRGB(208, 84, 92)
-local C_SHOOT = Color3.fromRGB(214, 142, 64)
-local C_WITCH = Color3.fromRGB(160, 108, 208)
-
-local C_ON_REDX = Color3.fromRGB(66, 34, 40)
+-- Bundled into one table: Luau allows only 200 locals per function and the
+-- main chunk was sitting right on the limit.
+local C = {
+	BG         = Color3.fromRGB(18, 18, 24),
+	PANEL      = Color3.fromRGB(23, 24, 33),
+	CARD       = Color3.fromRGB(25, 26, 36),
+	BTN        = Color3.fromRGB(29, 32, 46),
+	TAB_ON     = Color3.fromRGB(30, 40, 64),
+	TAB_OFF    = Color3.fromRGB(21, 22, 30),
+	TEXT       = Color3.fromRGB(235, 238, 248),
+	DIM        = Color3.fromRGB(140, 148, 168),
+	DISGUISE   = Color3.fromRGB(120, 200, 255),
+	KILLER     = Color3.fromRGB(255, 90, 100),
+	NEUTRAL    = Color3.fromRGB(66, 74, 98),
+	VIGIL      = Color3.fromRGB(120, 195, 150),
+	BORDER     = Color3.fromRGB(38, 62, 116),
+	BORDER_HL  = Color3.fromRGB(72, 122, 205),
+	STAB       = Color3.fromRGB(208, 84, 92),
+	SHOOT      = Color3.fromRGB(214, 142, 64),
+	WITCH      = Color3.fromRGB(160, 108, 208),
+	ON_REDX    = Color3.fromRGB(66, 34, 40),
+}
 
 local function uiCorner(radius: number, parent: Instance)
 	local c = Instance.new("UICorner")
@@ -546,7 +548,7 @@ end
 
 local function addStroke(parent: Instance, color: Color3?, thickness: number?): UIStroke
 	local s = Instance.new("UIStroke")
-	s.Color           = color or C_BORDER
+	s.Color           = color or C.BORDER
 	s.Thickness       = thickness or 1
 	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 	s.Parent          = parent
@@ -574,17 +576,17 @@ local main = Instance.new("Frame")
 main.Name             = "Window"
 main.Size             = UDim2.fromOffset(384, 586)
 main.Position         = UDim2.new(0, 20, 0.5, -293)
-main.BackgroundColor3 = C_BG
+main.BackgroundColor3 = C.BG
 main.BorderSizePixel  = 0
 main.Active           = true
 main.Parent           = gui
 uiCorner(10, main)
-addStroke(main, C_BORDER, 1)
+addStroke(main, C.BORDER, 1)
 
 local bar = Instance.new("Frame")
 bar.Name             = "TitleBar"
 bar.Size             = UDim2.new(1, 0, 0, 40)
-bar.BackgroundColor3 = C_BG
+bar.BackgroundColor3 = C.BG
 bar.BorderSizePixel  = 0
 bar.Parent           = main
 uiCorner(10, bar)
@@ -592,14 +594,14 @@ uiCorner(10, bar)
 local barPatch = Instance.new("Frame")
 barPatch.Size             = UDim2.new(1, 0, 0, 12)
 barPatch.Position         = UDim2.new(0, 0, 1, -12)
-barPatch.BackgroundColor3 = C_BG
+barPatch.BackgroundColor3 = C.BG
 barPatch.BorderSizePixel  = 0
 barPatch.Parent           = bar
 
 local barLine = Instance.new("Frame")
 barLine.Size             = UDim2.new(1, -20, 0, 1)
 barLine.Position         = UDim2.new(0, 10, 1, -1)
-barLine.BackgroundColor3 = C_BORDER
+barLine.BackgroundColor3 = C.BORDER
 barLine.BorderSizePixel  = 0
 barLine.Parent           = bar
 
@@ -610,7 +612,7 @@ title.Position       = UDim2.new(0, 14, 0, 0)
 title.Font           = Enum.Font.GothamBold
 title.Text           = "Identity Monitor"
 title.TextSize       = 15
-title.TextColor3     = C_TEXT
+title.TextColor3     = C.TEXT
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.Parent         = bar
 
@@ -623,16 +625,16 @@ local function makeCtrlButton(text: string, xFromRight: number, bg: Color3): Tex
 	b.Font             = Enum.Font.GothamBold
 	b.Text             = text
 	b.TextSize         = 15
-	b.TextColor3       = C_TEXT
+	b.TextColor3       = C.TEXT
 	b.AutoButtonColor  = true
 	b.Parent           = bar
 	uiCorner(6, b)
-	addStroke(b, C_BORDER, 1)
+	addStroke(b, C.BORDER, 1)
 	return b
 end
 
-local exitBtn     = makeCtrlButton("✕", -34, C_ON_REDX)
-local minimizeBtn = makeCtrlButton("–", -64, C_BTN)
+local exitBtn     = makeCtrlButton("✕", -34, C.ON_REDX)
+local minimizeBtn = makeCtrlButton("–", -64, C.BTN)
 
 --==================================================================
 -- Tab bar (4 tabs)
@@ -641,7 +643,7 @@ local tabBar = Instance.new("Frame")
 tabBar.Name             = "TabBar"
 tabBar.Size             = UDim2.new(1, 0, 0, 34)
 tabBar.Position         = UDim2.new(0, 0, 0, 40)
-tabBar.BackgroundColor3 = C_BG
+tabBar.BackgroundColor3 = C.BG
 tabBar.BorderSizePixel  = 0
 tabBar.Parent           = main
 
@@ -649,16 +651,16 @@ local function makeTab(text: string, index: number): TextButton
 	local b = Instance.new("TextButton")
 	b.Size             = UDim2.new(1/4, -7, 0, 26)
 	b.Position         = UDim2.new(index / 4, 5, 0, 4)
-	b.BackgroundColor3 = C_TAB_OFF
+	b.BackgroundColor3 = C.TAB_OFF
 	b.BorderSizePixel  = 0
 	b.Font             = Enum.Font.GothamMedium
 	b.Text             = text
 	b.TextSize         = 12
-	b.TextColor3       = C_DIM
+	b.TextColor3       = C.DIM
 	b.AutoButtonColor  = true
 	b.Parent           = tabBar
 	uiCorner(6, b)
-	addStroke(b, C_BORDER, 1)
+	addStroke(b, C.BORDER, 1)
 	return b
 end
 
@@ -679,23 +681,23 @@ content.Parent                 = main
 --==================================================================
 local function makeButton(text: string, parent: Instance): TextButton
 	local b = Instance.new("TextButton")
-	b.BackgroundColor3 = C_BTN
+	b.BackgroundColor3 = C.BTN
 	b.BorderSizePixel  = 0
 	b.Font             = Enum.Font.GothamMedium
 	b.Text             = text
 	b.TextSize         = 12
-	b.TextColor3       = C_TEXT
+	b.TextColor3       = C.TEXT
 	b.AutoButtonColor  = true
 	b.Parent           = parent
 	uiCorner(6, b)
-	addStroke(b, C_BORDER, 1)
+	addStroke(b, C.BORDER, 1)
 	return b
 end
 
 local function styleToggle(btn: TextButton, on: boolean)
-	btn.BackgroundColor3 = on and C_TAB_ON or C_BTN
+	btn.BackgroundColor3 = on and C.TAB_ON or C.BTN
 	local s = strokeOf(btn)
-	if s then s.Color = on and C_BORDER_HL or C_BORDER end
+	if s then s.Color = on and C.BORDER_HL or C.BORDER end
 end
 
 -- Integer slider: label + track + knob. onChange(value) fires on every change.
@@ -709,7 +711,7 @@ local function makeSlider(parent: Instance, y: number, minV: number, maxV: numbe
 	label.Position       = UDim2.new(0, 4, 0, y)
 	label.Font           = Enum.Font.Gotham
 	label.TextSize       = 11
-	label.TextColor3     = C_DIM
+	label.TextColor3     = C.DIM
 	label.TextXAlignment = Enum.TextXAlignment.Left
 	label.TextTruncate   = Enum.TextTruncate.AtEnd
 	label.Parent         = parent
@@ -717,15 +719,15 @@ local function makeSlider(parent: Instance, y: number, minV: number, maxV: numbe
 	local track = Instance.new("Frame")
 	track.Size             = UDim2.new(1, -8, 0, 6)
 	track.Position         = UDim2.new(0, 4, 0, y + 24)
-	track.BackgroundColor3 = C_BG
+	track.BackgroundColor3 = C.BG
 	track.BorderSizePixel  = 0
 	track.Parent           = parent
 	uiCorner(3, track)
-	addStroke(track, C_BORDER, 1)
+	addStroke(track, C.BORDER, 1)
 
 	local fill = Instance.new("Frame")
 	fill.Size             = UDim2.new(0, 0, 1, 0)
-	fill.BackgroundColor3 = C_BORDER_HL
+	fill.BackgroundColor3 = C.BORDER_HL
 	fill.BorderSizePixel  = 0
 	fill.Parent           = track
 	uiCorner(3, fill)
@@ -733,12 +735,12 @@ local function makeSlider(parent: Instance, y: number, minV: number, maxV: numbe
 	local knob = Instance.new("Frame")
 	knob.Size             = UDim2.new(0, 14, 0, 14)
 	knob.Position         = UDim2.new(0, -7, 0.5, -7)
-	knob.BackgroundColor3 = C_TEXT
+	knob.BackgroundColor3 = C.TEXT
 	knob.BorderSizePixel  = 0
 	knob.ZIndex           = 2
 	knob.Parent           = track
 	uiCorner(7, knob)
-	addStroke(knob, C_BORDER_HL, 1)
+	addStroke(knob, C.BORDER_HL, 1)
 
 	local hit = Instance.new("TextButton")
 	hit.Size                   = UDim2.new(1, -8, 0, 22)
@@ -803,11 +805,11 @@ effectsPage.Parent                 = content
 
 local eToolbar = Instance.new("Frame")
 eToolbar.Size             = UDim2.new(1, 0, 0, 30)
-eToolbar.BackgroundColor3 = C_PANEL
+eToolbar.BackgroundColor3 = C.PANEL
 eToolbar.BorderSizePixel  = 0
 eToolbar.Parent           = effectsPage
 uiCorner(8, eToolbar)
-addStroke(eToolbar, C_BORDER, 1)
+addStroke(eToolbar, C.BORDER, 1)
 
 local clearBtn = makeButton("Clear", eToolbar)
 clearBtn.Size     = UDim2.new(0, 58, 0, 22)
@@ -820,18 +822,18 @@ eCount.Position       = UDim2.new(1, -100, 0, 0)
 eCount.Font           = Enum.Font.Gotham
 eCount.Text           = "Fires: 0"
 eCount.TextSize       = 12
-eCount.TextColor3     = C_DIM
+eCount.TextColor3     = C.DIM
 eCount.TextXAlignment = Enum.TextXAlignment.Right
 eCount.Parent         = eToolbar
 
 local settingsPanel = Instance.new("Frame")
 settingsPanel.Size             = UDim2.new(1, 0, 0, 100)
 settingsPanel.Position         = UDim2.new(0, 0, 0, 36)
-settingsPanel.BackgroundColor3 = C_PANEL
+settingsPanel.BackgroundColor3 = C.PANEL
 settingsPanel.BorderSizePixel  = 0
 settingsPanel.Parent           = effectsPage
 uiCorner(8, settingsPanel)
-addStroke(settingsPanel, C_BORDER, 1)
+addStroke(settingsPanel, C.BORDER, 1)
 
 local hlToggle = makeButton("Highlight Killer: OFF", settingsPanel)
 hlToggle.Size     = UDim2.new(1, -16, 0, 26)
@@ -852,7 +854,7 @@ musicLbl.Position       = UDim2.new(0.6, 6, 0, 68)
 musicLbl.Font           = Enum.Font.Gotham
 musicLbl.Text           = "♪ —"
 musicLbl.TextSize       = 11
-musicLbl.TextColor3     = C_DIM
+musicLbl.TextColor3     = C.DIM
 musicLbl.TextXAlignment = Enum.TextXAlignment.Right
 musicLbl.TextTruncate   = Enum.TextTruncate.AtEnd
 musicLbl.Parent         = settingsPanel
@@ -863,7 +865,7 @@ eList.Position               = UDim2.new(0, 0, 0, 142)
 eList.BackgroundTransparency = 1
 eList.BorderSizePixel        = 0
 eList.ScrollBarThickness     = 4
-eList.ScrollBarImageColor3   = C_BORDER_HL
+eList.ScrollBarImageColor3   = C.BORDER_HL
 eList.CanvasSize             = UDim2.new(0, 0, 0, 0)
 eList.AutomaticCanvasSize    = Enum.AutomaticSize.Y
 eList.ScrollingDirection     = Enum.ScrollingDirection.Y
@@ -899,7 +901,7 @@ dHeader.Position       = UDim2.new(0, 4, 0, 0)
 dHeader.Font           = Enum.Font.GothamMedium
 dHeader.Text           = "Player = Disguise"
 dHeader.TextSize       = 12
-dHeader.TextColor3     = C_DIM
+dHeader.TextColor3     = C.DIM
 dHeader.TextXAlignment = Enum.TextXAlignment.Left
 dHeader.Parent         = disguisePage
 
@@ -910,7 +912,7 @@ dCount.Position       = UDim2.new(0.6, 0, 0, 0)
 dCount.Font           = Enum.Font.Gotham
 dCount.Text           = "Players: 0"
 dCount.TextSize       = 12
-dCount.TextColor3     = C_DIM
+dCount.TextColor3     = C.DIM
 dCount.TextXAlignment = Enum.TextXAlignment.Right
 dCount.Parent         = disguisePage
 
@@ -921,7 +923,7 @@ dLegend.Position       = UDim2.new(0, 4, 0, 22)
 dLegend.Font           = Enum.Font.Gotham
 dLegend.Text           = "Red = seen killing in the Effects tab"
 dLegend.TextSize       = 11
-dLegend.TextColor3     = C_KILLER
+dLegend.TextColor3     = C.KILLER
 dLegend.TextXAlignment = Enum.TextXAlignment.Left
 dLegend.Parent         = disguisePage
 
@@ -935,7 +937,7 @@ dList.Position               = UDim2.new(0, 0, 0, 74)
 dList.BackgroundTransparency = 1
 dList.BorderSizePixel        = 0
 dList.ScrollBarThickness     = 4
-dList.ScrollBarImageColor3   = C_BORDER_HL
+dList.ScrollBarImageColor3   = C.BORDER_HL
 dList.CanvasSize             = UDim2.new(0, 0, 0, 0)
 dList.AutomaticCanvasSize    = Enum.AutomaticSize.Y
 dList.ScrollingDirection     = Enum.ScrollingDirection.Y
@@ -971,26 +973,26 @@ mHeader.Position       = UDim2.new(0, 4, 0, 0)
 mHeader.Font           = Enum.Font.GothamMedium
 mHeader.Text           = "Target  (disguise name or username)"
 mHeader.TextSize       = 12
-mHeader.TextColor3     = C_DIM
+mHeader.TextColor3     = C.DIM
 mHeader.TextXAlignment = Enum.TextXAlignment.Left
 mHeader.Parent         = mafiaPage
 
 local targetBox = Instance.new("TextBox")
 targetBox.Size                   = UDim2.new(1, -8, 0, 32)
 targetBox.Position               = UDim2.new(0, 4, 0, 20)
-targetBox.BackgroundColor3       = C_PANEL
+targetBox.BackgroundColor3       = C.PANEL
 targetBox.BorderSizePixel        = 0
 targetBox.Font                   = Enum.Font.Gotham
 targetBox.PlaceholderText        = "type a disguise name or a username"
-targetBox.PlaceholderColor3      = C_DIM
+targetBox.PlaceholderColor3      = C.DIM
 targetBox.Text                   = ""
 targetBox.TextSize               = 13
-targetBox.TextColor3             = C_TEXT
+targetBox.TextColor3             = C.TEXT
 targetBox.TextXAlignment         = Enum.TextXAlignment.Left
 targetBox.ClearTextOnFocus       = false
 targetBox.Parent                 = mafiaPage
 uiCorner(6, targetBox)
-addStroke(targetBox, C_BORDER, 1)
+addStroke(targetBox, C.BORDER, 1)
 do
 	local p = Instance.new("UIPadding")
 	p.PaddingLeft  = UDim.new(0, 10)
@@ -1005,7 +1007,7 @@ resolvedLbl.Position       = UDim2.new(0, 4, 0, 56)
 resolvedLbl.Font           = Enum.Font.Gotham
 resolvedLbl.Text           = "→ resolves to: —"
 resolvedLbl.TextSize       = 12
-resolvedLbl.TextColor3     = C_DIM
+resolvedLbl.TextColor3     = C.DIM
 resolvedLbl.TextXAlignment = Enum.TextXAlignment.Left
 resolvedLbl.TextTruncate   = Enum.TextTruncate.AtEnd
 resolvedLbl.Parent         = mafiaPage
@@ -1015,16 +1017,16 @@ local function makeActionButton(text: string, y: number, accent: Color3): TextBu
 	local b = Instance.new("TextButton")
 	b.Size             = UDim2.new(1, -8, 0, 36)
 	b.Position         = UDim2.new(0, 4, 0, y)
-	b.BackgroundColor3 = C_BTN
+	b.BackgroundColor3 = C.BTN
 	b.BorderSizePixel  = 0
 	b.Font             = Enum.Font.GothamBold
 	b.Text             = text
 	b.TextSize         = 14
-	b.TextColor3       = C_TEXT
+	b.TextColor3       = C.TEXT
 	b.AutoButtonColor  = true
 	b.Parent           = mafiaPage
 	uiCorner(6, b)
-	addStroke(b, C_BORDER, 1)
+	addStroke(b, C.BORDER, 1)
 
 	local stripe = Instance.new("Frame")
 	stripe.Size             = UDim2.new(0, 3, 1, -12)
@@ -1043,13 +1045,13 @@ local function makeCaptionButton(mainText: string, capText: string, y: number, a
 	local b = Instance.new("TextButton")
 	b.Size             = UDim2.new(1, -8, 0, 42)
 	b.Position         = UDim2.new(0, 4, 0, y)
-	b.BackgroundColor3 = C_BTN
+	b.BackgroundColor3 = C.BTN
 	b.BorderSizePixel  = 0
 	b.Text             = ""
 	b.AutoButtonColor  = true
 	b.Parent           = mafiaPage
 	uiCorner(6, b)
-	addStroke(b, C_BORDER, 1)
+	addStroke(b, C.BORDER, 1)
 
 	local stripe = Instance.new("Frame")
 	stripe.Size             = UDim2.new(0, 3, 1, -14)
@@ -1066,7 +1068,7 @@ local function makeCaptionButton(mainText: string, capText: string, y: number, a
 	mainLbl.Font           = Enum.Font.GothamBold
 	mainLbl.Text           = mainText
 	mainLbl.TextSize       = 14
-	mainLbl.TextColor3     = C_TEXT
+	mainLbl.TextColor3     = C.TEXT
 	mainLbl.TextXAlignment = Enum.TextXAlignment.Center
 	mainLbl.Parent         = b
 
@@ -1085,17 +1087,17 @@ local function makeCaptionButton(mainText: string, capText: string, y: number, a
 	return b, cap
 end
 
-local stabBtn   = makeActionButton("Remote Stab", 76, C_STAB)
-local shootBtn  = makeCaptionButton("Remote Shoot", "(Risky, use with EMP)", 116, C_SHOOT)
-local witchBtn  = makeActionButton("Remote Witch", 162, C_WITCH)
+local stabBtn   = makeActionButton("Remote Stab", 76, C.STAB)
+local shootBtn  = makeCaptionButton("Remote Shoot", "(Risky, use with EMP)", 116, C.SHOOT)
+local witchBtn  = makeActionButton("Remote Witch", 162, C.WITCH)
 
 -- Nearest-target actions: ignore the text box entirely and use the closest
 -- disguised, non-killer player. The caption shows who that currently is.
-local nearestStabBtn,  nearestStabCap  = makeCaptionButton("Nearest Stab",  "nearest: —", 202, C_STAB)
-local nearestWitchBtn, nearestWitchCap = makeCaptionButton("Nearest Witch", "nearest: —", 248, C_WITCH)
+local nearestStabBtn,  nearestStabCap  = makeCaptionButton("Nearest Stab",  "nearest: —", 202, C.STAB)
+local nearestWitchBtn, nearestWitchCap = makeCaptionButton("Nearest Witch", "nearest: —", 248, C.WITCH)
 
-local tpStabBtn  = makeCaptionButton("Teleport Stab",  "(Risky, use with EMP)", 300, C_STAB)
-local tpWitchBtn = makeCaptionButton("Teleport Witch", "(Risky, use with EMP)", 346, C_WITCH)
+local tpStabBtn  = makeCaptionButton("Teleport Stab",  "(Risky, use with EMP)", 300, C.STAB)
+local tpWitchBtn = makeCaptionButton("Teleport Witch", "(Risky, use with EMP)", 346, C.WITCH)
 
 -- Teleport sliders (shared by Teleport Stab and Teleport Witch)
 local setFramesSlider = makeSlider(mafiaPage, 392, 0, MAX_TP_FRAMES, tpStabFrames,
@@ -1113,7 +1115,7 @@ mStatus.Position       = UDim2.new(0, 4, 0, 478)
 mStatus.Font           = Enum.Font.Gotham
 mStatus.Text           = "Last action: —"
 mStatus.TextSize       = 12
-mStatus.TextColor3     = C_DIM
+mStatus.TextColor3     = C.DIM
 mStatus.TextXAlignment = Enum.TextXAlignment.Left
 mStatus.TextTruncate   = Enum.TextTruncate.AtEnd
 mStatus.Parent         = mafiaPage
@@ -1158,7 +1160,7 @@ mtpHeader.Position       = UDim2.new(0, 4, 0, 88)
 mtpHeader.Font           = Enum.Font.GothamMedium
 mtpHeader.Text           = "Disguise Teleport"
 mtpHeader.TextSize       = 12
-mtpHeader.TextColor3     = C_DIM
+mtpHeader.TextColor3     = C.DIM
 mtpHeader.TextXAlignment = Enum.TextXAlignment.Left
 mtpHeader.Parent         = miscPage
 
@@ -1171,19 +1173,19 @@ tpBtn.TextSize = 14
 local tpBox = Instance.new("TextBox")
 tpBox.Size                  = UDim2.new(1, -8, 0, 34)
 tpBox.Position              = UDim2.new(0, 4, 0, 152)
-tpBox.BackgroundColor3      = C_PANEL
+tpBox.BackgroundColor3      = C.PANEL
 tpBox.BorderSizePixel       = 0
 tpBox.Font                  = Enum.Font.Gotham
 tpBox.PlaceholderText       = "type a disguise name or a username"
-tpBox.PlaceholderColor3     = C_DIM
+tpBox.PlaceholderColor3     = C.DIM
 tpBox.Text                  = ""
 tpBox.TextSize              = 13
-tpBox.TextColor3            = C_TEXT
+tpBox.TextColor3            = C.TEXT
 tpBox.TextXAlignment        = Enum.TextXAlignment.Left
 tpBox.ClearTextOnFocus      = false
 tpBox.Parent                = miscPage
 uiCorner(6, tpBox)
-addStroke(tpBox, C_BORDER, 1)
+addStroke(tpBox, C.BORDER, 1)
 do
 	local p = Instance.new("UIPadding")
 	p.PaddingLeft  = UDim.new(0, 10)
@@ -1198,7 +1200,7 @@ tpResolved.Position       = UDim2.new(0, 4, 0, 190)
 tpResolved.Font           = Enum.Font.Gotham
 tpResolved.Text           = "→ resolves to: —"
 tpResolved.TextSize       = 12
-tpResolved.TextColor3     = C_DIM
+tpResolved.TextColor3     = C.DIM
 tpResolved.TextXAlignment = Enum.TextXAlignment.Left
 tpResolved.TextTruncate   = Enum.TextTruncate.AtEnd
 tpResolved.Parent         = miscPage
@@ -1210,7 +1212,7 @@ miscStatus.Position       = UDim2.new(0, 4, 0, 212)
 miscStatus.Font           = Enum.Font.Gotham
 miscStatus.Text           = "Last action: —"
 miscStatus.TextSize       = 12
-miscStatus.TextColor3     = C_DIM
+miscStatus.TextColor3     = C.DIM
 miscStatus.TextXAlignment = Enum.TextXAlignment.Left
 miscStatus.TextTruncate   = Enum.TextTruncate.AtEnd
 miscStatus.Parent         = miscPage
@@ -1233,16 +1235,16 @@ resetBtn.Size             = UDim2.new(1, -8, 0, 30)
 resetBtn.Position         = UDim2.new(0, 4, 0, 318)
 resetBtn.Font             = Enum.Font.GothamBold
 resetBtn.TextSize         = 13
-resetBtn.BackgroundColor3 = C_ON_REDX
+resetBtn.BackgroundColor3 = C.ON_REDX
 
 --==================================================================
 -- Tab switching
 --==================================================================
 local function styleTab(tab: TextButton, active: boolean)
-	tab.BackgroundColor3 = active and C_TAB_ON or C_TAB_OFF
-	tab.TextColor3       = active and C_TEXT or C_DIM
+	tab.BackgroundColor3 = active and C.TAB_ON or C.TAB_OFF
+	tab.TextColor3       = active and C.TEXT or C.DIM
 	local s = strokeOf(tab)
-	if s then s.Color = active and C_BORDER_HL or C_BORDER end
+	if s then s.Color = active and C.BORDER_HL or C.BORDER end
 end
 
 local updateNearestCaptions: (() -> ())? = nil
@@ -1313,7 +1315,7 @@ local function makeRow(parent: Instance, y: number, prefix: string, value: strin
 	pre.Font           = Enum.Font.Gotham
 	pre.Text           = prefix
 	pre.TextSize       = 14
-	pre.TextColor3     = C_DIM
+	pre.TextColor3     = C.DIM
 	pre.TextXAlignment = Enum.TextXAlignment.Left
 	pre.Parent         = parent
 
@@ -1340,7 +1342,7 @@ local function addResult(killType: any, killer: any, victim: any, ignored: boole
 	local victimName = nameOf(victim)
 	local typeText   = killType ~= nil and tostring(killType) or "?"
 	local verb       = verbFor(killType)
-	local accent     = ignored and C_VIGIL or colorFor(killType)
+	local accent     = ignored and C.VIGIL or colorFor(killType)
 	local stamp      = os.date("%H:%M:%S")
 	local recordedKiller: string? = nil
 
@@ -1361,13 +1363,13 @@ local function addResult(killType: any, killer: any, victim: any, ignored: boole
 
 	local card = Instance.new("Frame")
 	card.Size                   = UDim2.new(1, -6, 0, ignored and 92 or 74)
-	card.BackgroundColor3       = C_CARD
+	card.BackgroundColor3       = C.CARD
 	card.BackgroundTransparency = ignored and 0.35 or 0
 	card.BorderSizePixel        = 0
 	card.LayoutOrder            = cardOrder
 	card.Parent                 = eList
 	uiCorner(8, card)
-	addStroke(card, C_BORDER, 1)
+	addStroke(card, C.BORDER, 1)
 
 	local stripe = Instance.new("Frame")
 	stripe.Size             = UDim2.new(0, 3, 1, -14)
@@ -1389,7 +1391,7 @@ local function addResult(killType: any, killer: any, victim: any, ignored: boole
 	header.TextTruncate   = Enum.TextTruncate.AtEnd
 	header.Parent         = card
 
-	local valueColor = ignored and C_DIM or C_TEXT
+	local valueColor = ignored and C.DIM or C.TEXT
 	makeRow(card, 28, "Killer:", killerName, valueColor)
 	makeRow(card, 48, verb .. ":", victimName, valueColor)
 
@@ -1401,7 +1403,7 @@ local function addResult(killType: any, killer: any, victim: any, ignored: boole
 		tag.Font           = Enum.Font.GothamMedium
 		tag.Text           = "⚖ discussion — vigilante, not counted"
 		tag.TextSize       = 11
-		tag.TextColor3     = C_VIGIL
+		tag.TextColor3     = C.VIGIL
 		tag.TextXAlignment = Enum.TextXAlignment.Left
 		tag.TextTruncate   = Enum.TextTruncate.AtEnd
 		tag.Parent         = card
@@ -1410,16 +1412,16 @@ local function addResult(killType: any, killer: any, victim: any, ignored: boole
 	local removeBtn = Instance.new("TextButton")
 	removeBtn.Size             = UDim2.fromOffset(18, 18)
 	removeBtn.Position         = UDim2.new(1, -24, 0, 6)
-	removeBtn.BackgroundColor3 = C_BTN
+	removeBtn.BackgroundColor3 = C.BTN
 	removeBtn.BorderSizePixel  = 0
 	removeBtn.Font             = Enum.Font.GothamBold
 	removeBtn.Text             = "✕"
 	removeBtn.TextSize         = 12
-	removeBtn.TextColor3       = C_DIM
+	removeBtn.TextColor3       = C.DIM
 	removeBtn.AutoButtonColor  = true
 	removeBtn.Parent           = card
 	uiCorner(4, removeBtn)
-	addStroke(removeBtn, C_BORDER, 1)
+	addStroke(removeBtn, C.BORDER, 1)
 
 	removeBtn.MouseButton1Click:Connect(function()
 		if recordedKiller then
@@ -1467,17 +1469,17 @@ end
 local function makeDisguiseRow(order: number, plr: Player, disguise: string, killer: boolean)
 	local row = Instance.new("Frame")
 	row.Size             = UDim2.new(1, -6, 0, 48)
-	row.BackgroundColor3 = C_CARD
+	row.BackgroundColor3 = C.CARD
 	row.BorderSizePixel  = 0
 	row.LayoutOrder      = order
 	row.Parent           = dList
 	uiCorner(6, row)
-	addStroke(row, C_BORDER, 1)
+	addStroke(row, C.BORDER, 1)
 
 	local stripe = Instance.new("Frame")
 	stripe.Size             = UDim2.new(0, 3, 1, -14)
 	stripe.Position         = UDim2.new(0, 8, 0, 7)
-	stripe.BackgroundColor3 = killer and C_KILLER or C_NEUTRAL
+	stripe.BackgroundColor3 = killer and C.KILLER or C.NEUTRAL
 	stripe.BorderSizePixel  = 0
 	stripe.Parent           = row
 	uiCorner(2, stripe)
@@ -1497,7 +1499,7 @@ local function makeDisguiseRow(order: number, plr: Player, disguise: string, kil
 	nameLbl.Font           = Enum.Font.GothamMedium
 	nameLbl.Text           = nameText
 	nameLbl.TextSize       = 13
-	nameLbl.TextColor3     = C_TEXT
+	nameLbl.TextColor3     = C.TEXT
 	nameLbl.TextXAlignment = Enum.TextXAlignment.Left
 	nameLbl.TextTruncate   = Enum.TextTruncate.AtEnd
 	nameLbl.Parent         = row
@@ -1509,7 +1511,7 @@ local function makeDisguiseRow(order: number, plr: Player, disguise: string, kil
 	disgLbl.Font           = Enum.Font.GothamBold
 	disgLbl.Text           = "= " .. disguise
 	disgLbl.TextSize       = 13
-	disgLbl.TextColor3     = killer and C_KILLER or C_DISGUISE
+	disgLbl.TextColor3     = killer and C.KILLER or C.DISGUISE
 	disgLbl.TextXAlignment = Enum.TextXAlignment.Left
 	disgLbl.TextTruncate   = Enum.TextTruncate.AtEnd
 	disgLbl.Parent         = row
@@ -1518,7 +1520,7 @@ local function makeDisguiseRow(order: number, plr: Player, disguise: string, kil
 		local badge = Instance.new("TextLabel")
 		badge.Size             = UDim2.new(0, 52, 0, 18)
 		badge.Position         = UDim2.new(1, -60, 0, 6)
-		badge.BackgroundColor3 = C_KILLER
+		badge.BackgroundColor3 = C.KILLER
 		badge.BorderSizePixel  = 0
 		badge.Font             = Enum.Font.GothamBold
 		badge.Text             = "KILLER"
@@ -1639,10 +1641,10 @@ updateNearestCaptions = function()
 	local color: Color3
 	if name then
 		text  = string.format("%s  (%s)  •  %d studs", name, disguise or "?", math.floor((dist or 0) + 0.5))
-		color = C_DISGUISE
+		color = C.DISGUISE
 	else
 		text  = "nearest: none found"
-		color = C_DIM
+		color = C.DIM
 	end
 	nearestStabCap.Text        = text
 	nearestStabCap.TextColor3  = color
@@ -1722,10 +1724,10 @@ local function updateResolved()
 	local target = resolveTarget(targetBox.Text)
 	if target then
 		resolvedLbl.Text = "→ resolves to: " .. target
-		resolvedLbl.TextColor3 = C_DISGUISE
+		resolvedLbl.TextColor3 = C.DISGUISE
 	else
 		resolvedLbl.Text = "→ resolves to: —"
-		resolvedLbl.TextColor3 = C_DIM
+		resolvedLbl.TextColor3 = C.DIM
 	end
 end
 targetBox:GetPropertyChangedSignal("Text"):Connect(updateResolved)
@@ -1734,16 +1736,16 @@ local function runAction(label: string, fn: (string) -> ())
 	local target = resolveTarget(targetBox.Text)
 	if not target then
 		mStatus.Text = label .. ": no target entered"
-		mStatus.TextColor3 = C_KILLER
+		mStatus.TextColor3 = C.KILLER
 		return
 	end
 	local ok, err = pcall(fn, target)
 	if ok then
 		mStatus.Text = string.format("Last action: %s → %s", label, target)
-		mStatus.TextColor3 = C_VIGIL
+		mStatus.TextColor3 = C.VIGIL
 	else
 		mStatus.Text = string.format("%s errored: %s", label, tostring(err))
-		mStatus.TextColor3 = C_KILLER
+		mStatus.TextColor3 = C.KILLER
 	end
 end
 
@@ -1759,7 +1761,7 @@ local function runNearestAction(label: string, fn: (string) -> ())
 
 	if not nearestPlayer then
 		mStatus.Text = label .. ": no disguised non-killer nearby"
-		mStatus.TextColor3 = C_KILLER
+		mStatus.TextColor3 = C.KILLER
 		return
 	end
 
@@ -1767,10 +1769,10 @@ local function runNearestAction(label: string, fn: (string) -> ())
 	if ok then
 		mStatus.Text = string.format("Last action: %s → %s (%s, %d studs)",
 			label, nearestPlayer, disguise or "?", math.floor((dist or 0) + 0.5))
-		mStatus.TextColor3 = C_VIGIL
+		mStatus.TextColor3 = C.VIGIL
 	else
 		mStatus.Text = string.format("%s errored: %s", label, tostring(err))
-		mStatus.TextColor3 = C_KILLER
+		mStatus.TextColor3 = C.KILLER
 	end
 end
 
@@ -1786,14 +1788,14 @@ local function teleportAttack(label: string, fn: (string) -> ())
 	local target = resolveTarget(targetBox.Text)
 	if not target then
 		mStatus.Text = label .. ": no target entered"
-		mStatus.TextColor3 = C_KILLER
+		mStatus.TextColor3 = C.KILLER
 		return
 	end
 
 	local targetPlayer = Players:FindFirstChild(target)
 	if not targetPlayer then
 		mStatus.Text = label .. ": player not found (" .. target .. ")"
-		mStatus.TextColor3 = C_KILLER
+		mStatus.TextColor3 = C.KILLER
 		return
 	end
 
@@ -1803,7 +1805,7 @@ local function teleportAttack(label: string, fn: (string) -> ())
 	local myRoot = myChar and (myChar:FindFirstChild("HumanoidRootPart") or myChar.PrimaryPart)
 	if not tRoot or not myRoot then
 		mStatus.Text = label .. ": no character available"
-		mStatus.TextColor3 = C_KILLER
+		mStatus.TextColor3 = C.KILLER
 		return
 	end
 
@@ -1853,7 +1855,7 @@ local function teleportAttack(label: string, fn: (string) -> ())
 
 	tpAttackBusy = false
 	mStatus.Text = string.format("%s → %s", label, target)
-	mStatus.TextColor3 = C_VIGIL
+	mStatus.TextColor3 = C.VIGIL
 end
 
 tpStabBtn.MouseButton1Click:Connect(function()  teleportAttack("Teleport Stab",  remoteStab)  end)
@@ -1986,7 +1988,7 @@ local function resetSettings()
 	queueSave()
 
 	miscStatus.Text = "Settings reset to defaults"
-	miscStatus.TextColor3 = C_VIGIL
+	miscStatus.TextColor3 = C.VIGIL
 end
 resetBtn.MouseButton1Click:Connect(resetSettings)
 
@@ -1994,10 +1996,10 @@ local function updateTpResolved()
 	local target = resolveTarget(tpBox.Text)
 	if target then
 		tpResolved.Text = "→ resolves to: " .. target
-		tpResolved.TextColor3 = C_DISGUISE
+		tpResolved.TextColor3 = C.DISGUISE
 	else
 		tpResolved.Text = "→ resolves to: —"
-		tpResolved.TextColor3 = C_DIM
+		tpResolved.TextColor3 = C.DIM
 	end
 end
 tpBox:GetPropertyChangedSignal("Text"):Connect(updateTpResolved)
@@ -2006,14 +2008,14 @@ tpBtn.MouseButton1Click:Connect(function()
 	local target = resolveTarget(tpBox.Text)
 	if not target then
 		miscStatus.Text = "Teleport: no target entered"
-		miscStatus.TextColor3 = C_KILLER
+		miscStatus.TextColor3 = C.KILLER
 		return
 	end
 
 	local targetPlayer = Players:FindFirstChild(target)
 	if not targetPlayer then
 		miscStatus.Text = "Teleport: player not found (" .. target .. ")"
-		miscStatus.TextColor3 = C_KILLER
+		miscStatus.TextColor3 = C.KILLER
 		return
 	end
 
@@ -2023,7 +2025,7 @@ tpBtn.MouseButton1Click:Connect(function()
 	local myRoot = myChar and (myChar:FindFirstChild("HumanoidRootPart") or myChar.PrimaryPart)
 	if not tRoot or not myRoot then
 		miscStatus.Text = "Teleport: no character available"
-		miscStatus.TextColor3 = C_KILLER
+		miscStatus.TextColor3 = C.KILLER
 		return
 	end
 
@@ -2032,7 +2034,7 @@ tpBtn.MouseButton1Click:Connect(function()
 	releaseCameraLookOnInput()
 
 	miscStatus.Text = "Teleported behind " .. target
-	miscStatus.TextColor3 = C_VIGIL
+	miscStatus.TextColor3 = C.VIGIL
 end)
 
 minimizeBtn.MouseButton1Click:Connect(function()
